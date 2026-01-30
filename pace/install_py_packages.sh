@@ -15,7 +15,7 @@ cd mujoco_playground
 uv venv --python 3.12
 source .venv/bin/activate
 # Jax versions >=0.6.0 will not work, since some API's were deprecated and removed. Until this library is updated, use any version before 0.6.0 -- Madrona
-uv pip install -U "jax[cuda12]<0.6.0" --index-url https://pypi.org/simple
+uv pip install -U "jax[cuda12]<0.6.0" --index-url https://pypi.org/simple --force-reinstall
 
 python -c "import jax; print('JAX default backend (should be gpu):', jax.default_backend())"
 
