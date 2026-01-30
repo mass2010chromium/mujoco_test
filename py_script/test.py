@@ -132,6 +132,10 @@ rng = jax.random.PRNGKey(42)
 rollout = []
 n_episodes = 1
 
+
+def unvmap(x):
+  return jax.tree.map(lambda y: y[0], x)
+
 for _ in range(n_episodes):
   key_rng = jax.random.split(rng, num_envs)
   state = jit_reset(key_rng)

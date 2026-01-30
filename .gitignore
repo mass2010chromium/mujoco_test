@@ -7,3 +7,4 @@ sbatch_python.log*
 logs/
 tmp*
 *.mp4
+*.png
