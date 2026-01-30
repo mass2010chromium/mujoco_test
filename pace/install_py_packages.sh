@@ -1,5 +1,5 @@
 #! /bin/env bash
-#SBATCH -J IsaacSimBuildLibC
+#SBATCH -J InstallMujoco
 #SBATCH --nodefile=pace/nodes_rtx6000.txt
 #SBATCH -N1 --ntasks-per-node=1 --cpus-per-task=12
 #SBATCH --mem 32G

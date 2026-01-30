@@ -1,0 +1,94 @@
+#!/bin/env python
+
+"""
+Wrapper around srun for running python scripts.
+"""
+import argparse
+import os
+import subprocess
+import time
+
+if __name__ == "__main__":
+    SCRIPT_DIR = os.path.dirname(__file__)
+    DEFAULT_NODEFILE = os.path.join(SCRIPT_DIR, 'nodes_rtx6000.txt')
+    VENV_LOC = os.path.join(
+        'mujoco_playground', '.venv', 'bin', 'activate'
+    )
+
+    if not os.path.exists(VENV_LOC):
+        print(f"Could not find VENV at relative path: {VENV_LOC}")
+        print("This script must be run from repository toplevel")
+        exit(1)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--clean-logs', action='store_true')
+    parser.add_argument('--job-name', '-J', default='pace_python')
+    parser.add_argument('--nodefile', '-F', default=DEFAULT_NODEFILE)
+    parser.add_argument('--cpus', default=4, type=int)
+    parser.add_argument('--mem', default='32G')
+    parser.add_argument('--gpus', '-G', default='rtx_6000')
+    parser.add_argument('--no-python', action='store_true')
+
+    args, rest = parser.parse_known_args()
+
+    if args.clean_logs:
+        os.system('rm -f sbatch_python.log')
+        os.system('rm -f sbatch_python.log.*')
+        if len(rest) == 0:
+            exit(0)
+
+    base_filename = 'sbatch_python.log'
+    if os.path.exists(base_filename):
+        i = 1
+        output_filename = f'{base_filename}.{i}'
+        while os.path.exists(output_filename):
+            i += 1
+            output_filename = f'{base_filename}.{i}'
+    else:
+        output_filename = base_filename
+
+    script_temp_file = os.path.join(SCRIPT_DIR, '.pace_python.sh')
+
+    with open(script_temp_file, 'w') as script_file:
+        if args.no_python:
+            exec_line = '$@'
+        else:
+            exec_line = 'python $@'
+        script_file.write(
+            f'#!/bin/env bash\n'
+            f'source {VENV_LOC}\n'
+            f'MUJOCO_GL=egl {exec_line}\n'
+        )
+
+    res = subprocess.run(['sbatch',
+        '-J', args.job_name,
+        '-F', args.nodefile,
+        '-c', str(args.cpus),
+        '-N', '1',
+        '--mem', args.mem,
+        '-G', args.gpus,
+        '-o', output_filename,
+        script_temp_file
+    ] + rest, capture_output=True, text=True)
+
+    if res.returncode != 0:
+        print("sbatch failed!")
+        print("stdout:", res.stdout)
+        print("stderr:", res.stderr)
+        exit(res.returncode)
+
+    # Submitted batch job <jobid>
+    job_id = res.stdout.strip().split()[-1]
+    print(f"Job ID: {job_id}")
+
+    try:
+        if not os.path.exists(output_filename):
+            print("Waiting for output file...", end='', flush=True)
+            while not os.path.exists(output_filename):
+                print(".", end='', flush=True)
+                time.sleep(1)
+            print()
+
+        subprocess.run(['tail', '-f', '-n100', output_filename])
+    except KeyboardInterrupt:
+        subprocess.run(['scancel', job_id])

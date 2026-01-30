@@ -2,3 +2,8 @@
 *.swo
 
 slurm*
+sbatch_python.log*
+
+logs/
+tmp*
+*.mp4
