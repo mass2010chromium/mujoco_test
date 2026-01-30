@@ -14,21 +14,26 @@ if __name__ == "__main__":
         'mujoco_playground', '.venv', 'bin', 'activate'
     )
 
+    parser = argparse.ArgumentParser(
+        prog='pace_python',
+        description='Launch python using SLURM with the preconfigured virtualenv and GPUs.',
+        usage='%(prog)s [options] [args]',
+        epilog='Additional arguments are interpreted as either arguments to `python`, or `bash` (if --no-python is passed).'
+    )
+    parser.add_argument('--clean-logs', action='store_true', help='Set to remove logfiles in this directory before running. Does not submit a job if no extra args passed.')
+    parser.add_argument('--job-name', '-J', default='pace_python', help='Name of the slurm job.')
+    parser.add_argument('--nodefile', '-F', help='File containing list of eligible nodes to run on. Automatically created as `nodes_<gpu>.txt` if left blank.')
+    parser.add_argument('--cpus', default=4, type=int, help='Number of CPU cores desired.')
+    parser.add_argument('--mem', default='32G', help='Amount of (CPU) memory desired. Use suffix K|M|G|T')
+    parser.add_argument('--gpus', '-G', default='rtx_6000', help='GPU to request for the job.')
+    parser.add_argument('--no-python', action='store_true', help="Don't launch python. Still useful if you want the virtualenv, or have your own ex. shell script you want to run in this environment. Extra arguments are interpreted as bash arguments.")
+
+    args, rest = parser.parse_known_args()
+
     if not os.path.exists(VENV_LOC):
         print(f"Could not find VENV at relative path: {VENV_LOC}")
         print("This script must be run from repository toplevel")
         exit(1)
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--clean-logs', action='store_true')
-    parser.add_argument('--job-name', '-J', default='pace_python')
-    parser.add_argument('--nodefile', '-F')
-    parser.add_argument('--cpus', default=4, type=int)
-    parser.add_argument('--mem', default='32G')
-    parser.add_argument('--gpus', '-G', default='rtx_6000')
-    parser.add_argument('--no-python', action='store_true')
-
-    args, rest = parser.parse_known_args()
 
     nodefile = args.nodefile
     if args.nodefile is None:
