@@ -7,4 +7,4 @@
 
 cd mujoco_playground
 source .venv/bin/activate
-train-jax-ppo --env_name CartpoleBalance
+MUJOCO_GL=egl train-jax-ppo --env_name CartpoleBalance
