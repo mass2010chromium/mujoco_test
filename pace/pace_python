@@ -56,6 +56,7 @@ if __name__ == "__main__":
             exec_line = 'python $@'
         script_file.write(
             f'#!/bin/env bash\n'
+			f'module load cuda/12.1.1\n'
             f'source {VENV_LOC}\n'
             f'MUJOCO_GL=egl {exec_line}\n'
         )
