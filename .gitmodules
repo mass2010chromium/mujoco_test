@@ -1,9 +1,8 @@
-[submodule "pace/mujoco_playground"]
-	path = pace/mujoco_playground
-	url = https://github.com/google-deepmind/mujoco_playground.git
 [submodule "mujoco_playground"]
 	path = mujoco_playground
 	url = https://github.com/google-deepmind/mujoco_playground.git
+    ignore = dirty
 [submodule "madrona_mjx"]
 	path = madrona_mjx
 	url = https://github.com/shacklettbp/madrona_mjx.git
+    ignore = dirty
