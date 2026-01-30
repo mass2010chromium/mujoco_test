@@ -6,7 +6,7 @@
 #SBATCH --gpus=rtx_6000
 
 # Madrona-MJX install wants CUDA<12.5.1 for some reason
-module load cuda/12.1.1
+module load cuda/12.1.1 || echo "module load failed, OK if running locally / without sbatch"
 
 ### BEGIN Mujoco install
 
@@ -14,6 +14,7 @@ cd mujoco_playground
 
 uv venv --python 3.12
 source .venv/bin/activate
+
 # Jax versions >=0.6.0 will not work, since some API's were deprecated and removed. Until this library is updated, use any version before 0.6.0 -- Madrona
 uv pip install -U "jax[cuda12]<0.6.0" --index-url https://pypi.org/simple --force-reinstall
 
@@ -39,5 +40,9 @@ cmake ..
 make -j12
 cd ..
 uv pip install -e .
+
+# Seems like at some point jax gets reinstalled... let's fix that
+uv pip install -U "jax[cuda12]<0.6.0" --index-url https://pypi.org/simple --force-reinstall
+
 
 ### END Madrona-MJX install
