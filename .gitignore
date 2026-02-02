@@ -3,8 +3,11 @@
 
 slurm*
 sbatch_python.log*
+*.log
 
 logs/
 tmp*
 *.mp4
 *.png
+
+__pycache__
