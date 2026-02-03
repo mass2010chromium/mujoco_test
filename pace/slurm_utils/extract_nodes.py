@@ -16,11 +16,11 @@ for line in lines:
 
     if gpu_name not in gpu_to_nodes:
         gpu_to_nodes[gpu_name] = []
-    gpu_to_nodes[gpu_name].append(line[-1])
+    gpu_to_nodes[gpu_name].extend(line[-1].split(','))
 
 avail_gpus = list(avail_gpus)
 print("Available GPUS:", avail_gpus)
 for gpu in avail_gpus:
-    all_nodes = ','.join(gpu_to_nodes[gpu])
+    all_nodes = ','.join(set(gpu_to_nodes[gpu]))
     with open(f"../nodes_{gpu}.txt", 'w') as out_file:
         print(all_nodes, file=out_file)
