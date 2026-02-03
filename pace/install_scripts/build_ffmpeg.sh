@@ -1,7 +1,11 @@
 #!/bin/env bash
 
-PREFIX=/home/hice1/jpeng303/.local/
+mkdir -p ~/.local
+cd ~/.local
+PREFIX="$pwd"
 SCRIPT_DIR=$(cd -- "$(dirname -- "$BASH_SOURCE[0]")/" && pwd)
+
+cd ~
 
 mkdir -p installs
 cd installs

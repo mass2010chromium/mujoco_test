@@ -4,6 +4,7 @@ https://github.com/google-deepmind/mujoco_playground/issues/228
 """
 import functools
 import os
+import time
 
 os.environ["JAX_TRACEBACK_FILTERING"] = "off"
 
@@ -22,6 +23,9 @@ from openpi.training import config as _config
 from openpi.training import data_loader as _data_loader
 
 from panda_env import PandaPickCustom
+
+import profiling as prof
+prof.prof_start()
 
 # Load pi model
 vla_config = _config.get_config("pi05_droid")
@@ -63,18 +67,21 @@ rng = jax.random.PRNGKey(42)
 rollout = []
 n_episodes = 1
 
-def prompt_from_state(state):
-    frame = env.render([state], width=224, height=224)[0]
+env_render = prof.profiled(env.render, name='render')
 
+@prof.profiled
+def prompt_from_state(state):
     # qpos, qvel, gripper
-    qpos = state.obs['state'][:7]
-    gripper_pos = state.obs['state'][14]
+    qpos = np.array(state.obs['state'][:7])
+    gripper_pos = np.array(state.obs['state'][14])
+
+    frame = env_render([state], width=224, height=224)[0]
     return {
         'observation/exterior_image_1_left': frame,
         'observation/wrist_image_left': np.zeros((224, 224, 3), dtype=np.uint8),
-        'observation/joint_position': np.array(qpos),
-        'observation/gripper_position': np.array(gripper_pos),
-        'prompt': 'Move the arm to point straight up'
+        'observation/joint_position': qpos,
+        'observation/gripper_position': gripper_pos,
+        'prompt': 'Grab and pick up the red cube'
     }
 
 for _ in range(n_episodes):
@@ -84,6 +91,12 @@ for _ in range(n_episodes):
   actions = policy.infer(prompt)['actions']
   rollout.append(state)
 
+  jit_step = jit_step.lower(
+	state, actions[0]
+  ).compile()
+  jit_step = prof.profiled(jit_step, name='sim_step')
+  policy_infer = prof.profiled(policy.infer, name='vla_inference')
+
   trajectory_idx = 0
   for i in range(episode_length):
     act = actions[trajectory_idx]
@@ -92,7 +105,7 @@ for _ in range(n_episodes):
     trajectory_idx += 1
     if trajectory_idx == len(actions):
         prompt = prompt_from_state(state)
-        actions = policy.infer(prompt)['actions']
+        actions = policy_infer(prompt)['actions']
         trajectory_idx = 0
 
 render_every = 1

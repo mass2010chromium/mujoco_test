@@ -1,17 +1,14 @@
 #! /bin/env bash
 #SBATCH -J InstallMujoco
-#SBATCH --nodefile=pace/nodes_rtx_6000.txt
-#SBATCH -N1 --ntasks-per-node=1 --cpus-per-task=12
+#SBATCH -N1 --ntasks-per-node=1 --cpus-per-task=4
 #SBATCH --mem 32G
-#SBATCH --gpus=rtx_6000
 
 # Madrona-MJX install wants CUDA<12.5.1 for some reason
 module load cuda/12.1.1 || echo "module load failed, OK if running locally / without sbatch"
 
+
 ### BEGIN Mujoco install
-
 cd mujoco_playground
-
 uv venv --python 3.12
 source .venv/bin/activate
 
@@ -25,24 +22,25 @@ uv --no-config run python -c "import mujoco_playground; print('mujoco_playground
 uv --no-config run python -c "from mujoco_playground import locomotion; locomotion.load('G1JoystickFlatTerrain')"
 
 cd ..
-
 ### END Mujoco install
 
 
 ### BEGIN Madrona-MJX install
-
 cd madrona_mjx
 git submodule update --init --recursive
 
 mkdir build
 cd build
 cmake ..
-make -j12
+make -j4
 cd ..
 uv pip install -e .
 
 # Seems like at some point jax gets reinstalled... let's fix that
 uv pip install -U "jax[cuda12]<0.6.0" --index-url https://pypi.org/simple --force-reinstall
-
-
 ### END Madrona-MJX install
+
+
+### Pi0 install
+cd ../pace/install_scripts
+bash install_pi0.sh
