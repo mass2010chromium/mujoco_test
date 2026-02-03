@@ -44,3 +44,8 @@ uv pip install -U "jax[cuda12]<0.6.0" --index-url https://pypi.org/simple --forc
 ### Pi0 install
 cd ../pace/install_scripts
 bash install_pi0.sh
+
+
+### robosuite
+# TODO: move to uv
+uv pip install mink==0.0.5 qpsolvers==4.8.2 quadprog==0.1.13 robosuite==1.5.2
