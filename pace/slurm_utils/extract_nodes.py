@@ -1,3 +1,7 @@
+#!/bin/env python
+"""
+Parse a dumped sinfo log file and extract all the GPUs and their corresponding computers on this slurm system.
+"""
 import sys
 
 with open('sinfo.log', 'r') as infile:

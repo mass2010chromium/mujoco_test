@@ -1,7 +1,7 @@
 SCRIPT_DIR=$(cd -- "$(dirname -- "$BASH_SOURCE[0]")/" && pwd)
 
 cd "$SCRIPT_DIR"
-git clone --recurse-submodules git@github.com:Physical-Intelligence/openpi.git
+git clone --recurse-submodules https://github.com/Physical-Intelligence/openpi.git
 cd openpi
 
 source ../../mujoco_playground/.venv/bin/activate
