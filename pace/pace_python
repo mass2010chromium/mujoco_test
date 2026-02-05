@@ -27,6 +27,7 @@ if __name__ == "__main__":
     parser.add_argument('--mem', default='32G', help='Amount of (CPU) memory desired. Use suffix K|M|G|T')
     parser.add_argument('--gpus', '-G', default='a100', help='GPU to request for the job.')
     parser.add_argument('--no-python', action='store_true', help="Don't launch python. Still useful if you want the virtualenv, or have your own ex. shell script you want to run in this environment. Extra arguments are interpreted as bash arguments.")
+    parser.add_argument('--tunnel-port', default=None, help="Tunnel a port to the node running the python process.")
 
     args, rest = parser.parse_known_args()
 
@@ -64,6 +65,7 @@ if __name__ == "__main__":
             exec_line = 'python $@'
         script_file.write(
             f'#!/bin/env bash\n'
+            f'echo "Running on nodes: $SLURM_NODELIST"\n'
 			f'module load cuda/12.9.1\n'
             f'source {VENV_LOC}\n'
             f'MUJOCO_GL=egl {exec_line}\n'
@@ -91,13 +93,34 @@ if __name__ == "__main__":
     print(f"Job ID: {job_id}")
 
     try:
+        extra_procs = []
+
         if not os.path.exists(output_filename):
             print("Waiting for output file...", end='', flush=True)
-            while not os.path.exists(output_filename):
+            while True:
+                if os.path.exists(output_filename):
+                    success = False
+                    with open(output_filename, 'r') as file:
+                        lines_read = 0
+                        for line in file:
+                            if line.startswith("Running on nodes:"):
+                                node_name = line.split(':', 1)[1].strip()
+                                success = True
+                                break
+                            lines_read += 1
+                            if lines_read > 20: # It should appear on exactly the 10th line
+                                break
+                    if success:
+                        break
                 print(".", end='', flush=True)
                 time.sleep(1)
             print()
 
+        if args.tunnel_port is not None:
+            ssh_logfile = open(f'{output_filename}.ssh', 'w')
+            extra_procs.append(subprocess.Popen(['ssh', '-vvv', '-oStrictHostKeyChecking=no', '-NT', '-L', f'{args.tunnel_port}:127.0.0.1:{args.tunnel_port}', node_name], stdout=ssh_logfile, stderr=ssh_logfile))
         subprocess.run(['tail', '-f', '-n100', output_filename])
     except KeyboardInterrupt:
         subprocess.run(['scancel', job_id])
+        for proc in extra_procs:
+            proc.terminate()
