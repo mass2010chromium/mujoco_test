@@ -26,6 +26,7 @@ if __name__ == "__main__":
     parser.add_argument('--cpus', default=2, type=int, help='Number of CPU cores desired.')
     parser.add_argument('--mem', default='32G', help='Amount of (CPU) memory desired. Use suffix K|M|G|T')
     parser.add_argument('--gpus', '-G', default='a100', help='GPU to request for the job.')
+    parser.add_argument('--time', default='60', help='Amount of time (in minutes) to allocate for this job.')
     parser.add_argument('--no-python', action='store_true', help="Don't launch python. Still useful if you want the virtualenv, or have your own ex. shell script you want to run in this environment. Extra arguments are interpreted as bash arguments.")
     parser.add_argument('--tunnel-port', default=None, help="Tunnel a port to the node running the python process.")
 
