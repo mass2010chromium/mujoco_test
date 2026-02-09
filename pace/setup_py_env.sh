@@ -36,6 +36,7 @@ set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 
 # 1. Install uv package manager
 cd "$SCRIPT_DIR"
+git submodule update --recursive
 bash install_scripts/install_uv.sh
 source ~/.local/bin/env
 # END install uv

@@ -45,6 +45,9 @@ uv pip install -U "jax[cuda12]<0.6.0" --index-url https://pypi.org/simple --forc
 cd ../pace/install_scripts
 bash install_pi0.sh
 
+### notebook install
+bash install_notebook.sh
+
 
 ### robosuite
 # TODO: move to uv
