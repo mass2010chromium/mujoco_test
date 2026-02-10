@@ -313,7 +313,7 @@ index 8a4966d..9ebb690 100644
              state_str = " ".join(map(str, discretized_state))
 -            full_prompt = f"Task: {cleaned_text}, State: {state_str};\nAction: "
 +            #full_prompt = f"Task: {cleaned_text}, State: {state_str}; \nAction: "
-+            full_prompt = f"Task: {cleaned_text}. Subtask: " 
++            full_prompt = f"Task: {cleaned_text}. Subtask: "
              tokens = self._tokenizer.encode(full_prompt, add_bos=True)
          else:
              # This is the Pi0 format, where the state is part of the continuous action expert input.
