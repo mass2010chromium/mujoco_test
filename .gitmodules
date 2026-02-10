@@ -6,7 +6,7 @@
 	path = madrona_mjx
 	url = https://github.com/shacklettbp/madrona_mjx.git
     ignore = dirty
-[submodule "LIBERO"]
-	path = LIBERO
-	url = https://github.com/Lifelong-Robot-Learning/LIBERO.git
+[submodule "lerobot-libero"]
+	path = lerobot-libero
+	url = https://github.com/huggingface/lerobot-libero.git
     ignore = dirty

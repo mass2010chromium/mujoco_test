@@ -41,6 +41,13 @@ uv pip install -U "jax[cuda12]<0.6.0" --index-url https://pypi.org/simple --forc
 ### END Madrona-MJX install
 
 
+### LIBERO
+cd ../lerobot-libero
+git apply ../pace/install_scripts/lerobot-libero.patch
+uv pip install -r requirements.txt
+uv pip install -e .
+
+
 ### Pi0 install
 cd ../pace/install_scripts
 bash install_pi0.sh
@@ -51,4 +58,4 @@ bash install_notebook.sh
 
 ### robosuite
 # TODO: move to uv
-uv pip install mink==0.0.5 qpsolvers==4.8.2 quadprog==0.1.13 robosuite==1.5.2
+#uv pip install mink==0.0.5 qpsolvers==4.8.2 quadprog==0.1.13 robosuite==1.5.2

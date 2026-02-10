@@ -1,0 +1,38 @@
+diff --git a/libero/libero/benchmark/__init__.py b/libero/libero/benchmark/__init__.py
+index 2b833d0..5734edb 100644
+--- a/libero/libero/benchmark/__init__.py
++++ b/libero/libero/benchmark/__init__.py
+@@ -161,7 +161,7 @@ class Benchmark(abc.ABC):
+             self.tasks[i].problem_folder,
+             self.tasks[i].init_states_file,
+         )
+-        init_states = torch.load(init_states_path)
++        init_states = torch.load(init_states_path, weights_only=False)
+         return init_states
+ 
+     def set_task_embs(self, task_embs):
+diff --git a/pyproject.toml b/pyproject.toml
+index dbb9b61..9c89f93 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -15,7 +15,7 @@ requires-python = ">=3.8"
+ 
+ dependencies = [
+     # egl probe: canonical repo
+-    "egl_probe @ git+https://github.com/huggingface/egl_probe.git#egg=egl_probe",
++    "egl_probe @ git+https://github.com/huggingface/egl_probe.git@eb5e5f882236a5668e43a0e78121aaa10cdf2243#egg=egl_probe",
+ 
+     # core runtime / reproducible pins
+     "hydra-core>=1.2,<1.4",
+diff --git a/requirements.txt b/requirements.txt
+index 26f6414..fce2c1f 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,6 +1,6 @@
+ # egl probe: point to canonical repo or a particular commit/tag
+ # we use the canonical HF repo unless you need changes from a fork.
+-egl_probe @ git+https://github.com/huggingface/egl_probe.git#egg=egl_probe
++egl_probe @ git+https://github.com/huggingface/egl_probe.git@eb5e5f882236a5668e43a0e78121aaa10cdf2243#egg=egl_probe
+ # core runtime / reproducible pins where necessary
+ hydra-core>=1.2,<1.4 # >=1.2 and <1.4 matches other code expecting hydra 1.2.x
+ robomimic==0.2.0 # required exact version in your stacks

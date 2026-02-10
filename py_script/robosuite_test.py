@@ -1,5 +1,6 @@
 """
 Adapted from: https://robosuite.ai/docs/modules/environments.html
+REQUIRES: robosuite 1.5.2
 """
 import os
 
@@ -9,7 +10,6 @@ import mediapy as media
 import robosuite
 from robosuite.controllers import load_composite_controller_config
 
-from openpi.models import model as _model
 from openpi.policies import policy_config as _policy_config
 from openpi.shared import download
 from openpi.training import config as _config
