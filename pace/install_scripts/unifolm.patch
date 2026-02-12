@@ -1,0 +1,37 @@
+diff --git a/scripts/run_base_model_inference.sh b/scripts/run_base_model_inference.sh
+index 7740d14..0115869 100644
+--- a/scripts/run_base_model_inference.sh
++++ b/scripts/run_base_model_inference.sh
+@@ -1,12 +1,19 @@
+ #!/bin/bash
+ 
++SCRIPT_DIR=$(cd -- "$(dirname -- "$BASH_SOURCE[0]")/" && pwd)
++
++cd "$SCRIPT_DIR/.."
++
+ model_name=base_model
+-ckpt=/path/to/base/model
+-config=configs/inference/base_model_inference.yaml
+-res_dir="/path/to/result/directory"
++ckpt="$SCRIPT_DIR/../../vendored/unifolm_wma_base.ckpt"
++config="$SCRIPT_DIR/../configs/inference/base_model_inference.yaml"
++res_dir="$SCRIPT_DIR/results"
++prompt_dir="$SCRIPT_DIR/../examples/base_model_prompts"
+ seed=123
+ 
+-CUDA_VISIBLE_DEVICES=0 python3 scripts/evaluation/base_model_inference.py \
++mkdir -p "$res_dir"
++
++CUDA_VISIBLE_DEVICES=0,1 python3 "$SCRIPT_DIR/evaluation/base_model_inference.py" \
+ --seed ${seed} \
+ --ckpt_path $ckpt \
+ --config $config \
+@@ -15,7 +22,7 @@ CUDA_VISIBLE_DEVICES=0 python3 scripts/evaluation/base_model_inference.py \
+ --unconditional_guidance_scale 1.0 \
+ --ddim_steps 16 \
+ --ddim_eta 1.0 \
+---prompt_dir "/path/to/examples/base_model_prompts" \
++--prompt_dir "$prompt_dir" \
+ --text_input \
+ --video_length 16 \
+ --timestep_spacing 'uniform_trailing' \
