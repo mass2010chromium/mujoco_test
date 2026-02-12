@@ -10,3 +10,7 @@
 	path = lerobot-libero
 	url = https://github.com/huggingface/lerobot-libero.git
     ignore = dirty
+[submodule "unifolm-world-model-action"]
+	path = unifolm-world-model-action
+	url = https://github.com/unitreerobotics/unifolm-world-model-action.git
+    ignore = dirty

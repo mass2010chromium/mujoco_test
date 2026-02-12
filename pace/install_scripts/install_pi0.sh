@@ -10,8 +10,12 @@ UV_PIP_INSTALL () {
     GIT_LFS_SKIP_SMUDGE=1 uv pip install "$@"
 }
 
-GIT_LFS_SKIP_SMUDGE=1 uv sync
+#GIT_LFS_SKIP_SMUDGE=1 uv sync  # No sync...
 UV_PIP_INSTALL pytest
 UV_PIP_INSTALL -e .
 
 unset -f UV_PIP_INSTALL
+
+# Can't download paligemma tokenizer?
+mkdir -p ~/.cache/openpi
+cp -r ../../vendored/big_vision ~/.cache/openpi
