@@ -10,7 +10,7 @@ UV_PIP_INSTALL () {
     GIT_LFS_SKIP_SMUDGE=1 uv pip install "$@"
 }
 
-GIT_LFS_SKIP_SMUDGE=1 uv sync
+#GIT_LFS_SKIP_SMUDGE=1 uv sync  # No sync...
 UV_PIP_INSTALL pytest
 UV_PIP_INSTALL -e .
 

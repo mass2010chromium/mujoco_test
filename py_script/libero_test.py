@@ -120,6 +120,7 @@ if __name__ == "__main__":
                     prompt = prompt_from_obs(obs, task_description)
                     actions = policy.infer(prompt)['actions']
                     trajectory_idx = 0
+            mediapy.write_image('franka_libero_f0.png', frames[0])
             mediapy.write_video('franka_libero.mp4', frames, fps=FRAME_RATE)
             mediapy.write_video('franka_libero_wrist.mp4', wrist_frames, fps=FRAME_RATE)
             break
