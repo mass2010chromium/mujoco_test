@@ -304,7 +304,7 @@ index ae7c459..8e713b7 100644
 -        return x_0
 +        return (x_0, output_tokens)
 diff --git a/src/openpi/models/tokenizer.py b/src/openpi/models/tokenizer.py
-index 8a4966d..9ebb690 100644
+index 8a4966d..66b5909 100644
 --- a/src/openpi/models/tokenizer.py
 +++ b/src/openpi/models/tokenizer.py
 @@ -25,7 +25,8 @@ class PaligemmaTokenizer:
@@ -317,6 +317,16 @@ index 8a4966d..9ebb690 100644
              tokens = self._tokenizer.encode(full_prompt, add_bos=True)
          else:
              # This is the Pi0 format, where the state is part of the continuous action expert input.
+diff --git a/src/openpi/policies/droid_policy.py b/src/openpi/policies/droid_policy.py
+index 666b7f7..0d510e3 100644
+--- a/src/openpi/policies/droid_policy.py
++++ b/src/openpi/policies/droid_policy.py
+@@ -78,4 +78,4 @@ class DroidInputs(transforms.DataTransformFn):
+ class DroidOutputs(transforms.DataTransformFn):
+     def __call__(self, data: dict) -> dict:
+         # Only return the first 8 dims.
+-        return {"actions": np.asarray(data["actions"][:, :8])}
++        return {"actions": np.asarray(data["actions"][:, :8]), "subtask": data["subtask"]}
 diff --git a/src/openpi/policies/libero_policy.py b/src/openpi/policies/libero_policy.py
 index 10611f6..c49da5a 100644
 --- a/src/openpi/policies/libero_policy.py
@@ -395,15 +405,24 @@ index b9b708b..166ff8a 100644
          outputs["policy_timing"] = {
              "infer_ms": model_time * 1000,
 diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
-index 4ca47e1..0d0a8fa 100644
+index 4ca47e1..00646fa 100644
 --- a/src/openpi/training/config.py
 +++ b/src/openpi/training/config.py
+@@ -628,7 +628,7 @@ _CONFIGS = [
+     ),
+     TrainConfig(
+         name="pi05_droid",
+-        model=pi0_config.Pi0Config(action_horizon=15, pi05=True),
++        model=pi0_config.Pi0Config(pi05=True, action_horizon=15, discrete_state_input=True),
+         data=SimpleDataConfig(
+             assets=AssetsConfig(asset_id="droid"),
+             data_transforms=lambda model: _transforms.Group(
 @@ -742,7 +742,7 @@ _CONFIGS = [
      ),
      TrainConfig(
          name="pi05_libero",
 -        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
-+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=True),
++        model=pi0_config.Pi0Config(pi05=True, action_horizon=15, discrete_state_input=True),
          data=LeRobotLiberoDataConfig(
              repo_id="physical-intelligence/libero",
              base_config=DataConfig(prompt_from_task=True),
