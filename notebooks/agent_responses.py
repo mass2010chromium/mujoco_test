@@ -15,7 +15,7 @@ class StringResponse:
     def tool_response(string: str) -> str:
         return f'```tool_output\n{string}\n```'''
 
-    def to_msg(self) -> dict:
+    def to_msg(self, **kwargs) -> dict:
         return {'role': self.role, 'content': StringResponse.tool_response(self.msg)}
 
     def unbox(self):
@@ -52,22 +52,19 @@ class ImageResponse(StringResponse):
         res, buf = cv2.imencode(".png", image_bgr)
         return base64.b64encode(buf).decode('utf-8')
 
-    def to_msg(self) -> dict:
+    def to_msg(self, **kwargs) -> dict:
         message = self.message
-        if self.images is not None:
-            if message is None:
-                message = 'See attached images.'
-            return {
-                'role': self.role,
-                'content': StringResponse.tool_response(message),
-                'images': [ImageResponse.encode_image(img) for img in self.images]
-            }
         if message is None:
-            message = 'See attached image.'
+            message = 'See attached images.'
+        image_dat = self.images if self.images is not None else [self.img]
+        if kwargs.get('raw', False):
+            image_resp = image_dat
+        else:
+            image_resp = [ImageResponse.encode_image(img) for img in image_dat]
         return {
             'role': self.role,
             'content': StringResponse.tool_response(message),
-            'images': [ImageResponse.encode_image(self.img)]
+            'images': image_dat
         }
 
     def unbox(self):
