@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling", "rpyc"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llm_apis"
+version = "0.0.1"
+authors = [
+{ name="mass2010chromium", email="mass2010chromium@github.com" },
+]
+description = "Package for querying different LLMs/VLMs via ollama, openrouter, transformers"
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/mass2010chromium/llm_apis"
+Issues = "https://github.com/mass2010chromium/llm_apis/issues"
