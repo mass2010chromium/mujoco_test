@@ -42,7 +42,7 @@ tool_handler.add_message("Hello! I'm Bob, how are you?")
 resp = tool_handler.tool_chat(
     client,
     model=model_name,
-    keep_alive=-1,
+    keep_alive=0,
     options=dict(
         num_ctx=context_length,
         temperature=0.0

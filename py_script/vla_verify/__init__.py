@@ -27,7 +27,6 @@ Key design principles:
 from .scene_graph import SceneGraph, SceneNode, SceneEdge
 from .dsl import DSLAction, VerificationResult, verify_and_apply
 from .verifier import VLAVerifier, SubtaskVerificationResult
-from .scene_graph_constructor import construct_scene_graph
 from .subtask_translator import translate_subtask
 
 __all__ = [
@@ -39,6 +38,5 @@ __all__ = [
     "verify_and_apply",
     "VLAVerifier",
     "SubtaskVerificationResult",
-    "construct_scene_graph",
     "translate_subtask",
 ]

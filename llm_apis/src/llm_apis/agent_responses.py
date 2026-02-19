@@ -34,11 +34,10 @@ class ImageResponse(StringResponse):
         """
         Expects RGB array
         """
-        if img is None:
-            assert images is not None
+        if img is not None:
+            assert images is None
+        # On this branch, img is None.
         elif images is None:
-            assert img is not None
-        else:
             raise ValueError("One of img or images must not be None")
         self.img = img
         self.images = images
@@ -63,7 +62,7 @@ class ImageResponse(StringResponse):
         return {
             'role': self.role,
             'content': StringResponse.tool_response(message),
-            'images': image_dat
+            'images': image_resp
         }
 
     def unbox(self):

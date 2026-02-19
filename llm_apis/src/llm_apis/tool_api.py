@@ -178,7 +178,6 @@ class OllamaToolHandler(ToolHandler):
                 # waiting for a response
                 messages.append({'role': 'assistant', 'content': trunc_msg})
                 tool_msg = tool_resp.to_msg()
-                tool_msg['content'] = f'\n```tool_output\n{tool_msg["content"]}\n```'
                 messages.append(tool_msg)
             # For some reason it likes to set the done flag when calling functions
             elif chunk_done:
@@ -289,7 +288,7 @@ class TransformersToolHandler(ToolHandler):
                     if tool_match or eos:
                         break
                 more_llm_msg, _, _, eos, num_new_tokens = transformers_api.generate_output(
-                    self.model, self.processor, messages, text_context + llm_msg, self.prior_images,
+                    self.model, self.processor, [], text_context + llm_msg, self.prior_images,
                     max_new_tokens=block_size, **kwargs
                 )
                 print(more_llm_msg, end='', flush=True)
@@ -313,7 +312,6 @@ class TransformersToolHandler(ToolHandler):
                 print(f"WARNING: Wasting compute! Truncated message length {len(llm_msg)} -> {len(trunc_msg)}")
             tool_resp = self.run_tool_call(tool_match)
             tool_msg = tool_resp.to_msg(raw=True)
-            tool_msg['content'] = f'\n```tool_output\n{tool_msg["content"]}\n```'
             self.message_state.append(tool_msg)
 
 

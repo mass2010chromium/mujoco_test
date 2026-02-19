@@ -57,6 +57,9 @@ def make_message(texts=[], images=[], role="user"):
     messages = []
     for image in images:
         messages.append({'type': 'image', 'image': image})
-    for text in texts:
-        messages.append({'type': 'text', 'text': text})
+    if type(texts) == str:
+        messages.append({'type': 'text', 'text': texts})
+    else:
+        for text in texts:
+            messages.append({'type': 'text', 'text': text})
     return {"role": role, "content": messages}

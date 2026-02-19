@@ -14,10 +14,14 @@ The prompt design is informed by:
 import json
 import re
 from pathlib import Path
-from typing import Optional
+import time
 
-from .openrouter_client import query_vlm, DEFAULT_VLM_MODEL
-from .scene_graph import SceneGraph, SceneNode, SceneEdge
+import numpy as np
+
+from llm_apis.llm_tool import extract_json_from_response
+from llm_apis import transformers_api
+
+from .scene_graph import SceneGraph, SceneNode
 
 
 SCENE_GRAPH_PROMPT = """\
@@ -92,77 +96,26 @@ Output ONLY valid JSON (no markdown fences, no explanation) with this structure:
 }"""
 
 
-def _extract_json_from_response(text: str) -> dict:
-    """Extract JSON from a VLM response that may contain markdown fences."""
-    # Strip markdown code fences if present
-    code_block = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
-    if code_block:
-        json_str = code_block.group(1).strip()
-    else:
-        # Find the outermost { ... }
-        brace_start = text.find("{")
-        if brace_start < 0:
-            raise json.JSONDecodeError("No JSON object found", text, 0)
-        depth = 0
-        json_end = brace_start
-        for i in range(brace_start, len(text)):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    json_end = i + 1
-                    break
-        json_str = text[brace_start:json_end]
-
-    return json.loads(json_str)
-
-
-def construct_scene_graph(
-    image_path: Path,
-    vlm_model: str = DEFAULT_VLM_MODEL,
-    api_key: Optional[str] = None,
-) -> SceneGraph:
+def scene_graph_from_image(llm_response, image_rgb: np.ndarray):
     """
-    Construct a scene graph from an image using a VLM.
-
-    Args:
-        image_path: Path to the scene image.
-        vlm_model: OpenRouter model ID for the VLM.
-        api_key: OpenRouter API key (or from env).
-
-    Returns:
-        SceneGraph representing the initial scene state.
+    Interact with an LLM to construct a scene graph from an image observation.
     """
-    print(f"  [VLM] Querying {vlm_model} for scene graph construction...")
-    raw_response = query_vlm(
-        image_path=image_path,
-        prompt=SCENE_GRAPH_PROMPT,
-        model=vlm_model,
-        api_key=api_key,
-        temperature=0.1,
-    )
-    print(f"  [VLM] Response received ({len(raw_response)} chars)")
+    t0 = time.monotonic()
+    print(f"  [VLM] Querying VLM for scene graph construction...")
+    yield [ transformers_api.make_message(images=[image_rgb]) ]
 
+    raw_response = llm_response['content']
     try:
-        graph_dict = _extract_json_from_response(raw_response)
+        scene_graph_json = extract_json_from_response(raw_response)
     except (json.JSONDecodeError, ValueError) as e:
         print(f"  [VLM] WARNING: Failed to parse JSON: {e}")
         print(f"  [VLM] Raw response (first 2000 chars):\n{raw_response[:2000]}")
         raise ValueError(f"VLM returned invalid JSON: {e}") from e
+    t1 = time.monotonic()
+    print(f"  [VLM] Time elapsed: {t1 - t0}")
+    sg = SceneGraph.from_dict(scene_graph_json)
 
-    sg = SceneGraph.from_dict(graph_dict)
-    _post_process(sg)
-
-    print(
-        f"  [VLM] Scene graph constructed: "
-        f"{len(sg.nodes)} nodes, {len(sg.edges)} edges"
-    )
-    return sg
-
-
-def _post_process(sg: SceneGraph):
-    """Fix common VLM output issues to ensure graph consistency."""
+    # Postprocessing to fix common VLM issues
     # Ensure an agent node exists
     agent = sg.get_agent_node()
     if not agent:
@@ -202,3 +155,5 @@ def _post_process(sg: SceneGraph):
                     node.affordances.append("close")
                 if "place_in" not in node.affordances:
                     node.affordances.append("place_in")
+    yield sg
+scene_graph_from_image.system_prompt = SCENE_GRAPH_PROMPT

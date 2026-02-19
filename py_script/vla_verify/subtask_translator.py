@@ -13,11 +13,14 @@ It outputs a DSL action or marks the subtask as INVALID with reasoning.
 
 import json
 import re
+import time
 from typing import Optional
 
-from .openrouter_client import query_llm, DEFAULT_LLM_MODEL
-from .scene_graph import SceneGraph
+from llm_apis.llm_tool import extract_json_from_response
+from llm_apis import transformers_api
+
 from .dsl import DSLAction
+from .scene_graph import SceneGraph
 
 
 TRANSLATOR_SYSTEM_PROMPT = """\
@@ -101,37 +104,10 @@ If INVALID:
 "object_resolution": "", \
 "reasoning": "specific explanation of what is wrong"}}"""
 
-
-def _extract_json(text: str) -> dict:
-    """Extract JSON from LLM response (may have markdown fences or thinking)."""
-    code_block = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
-    if code_block:
-        json_str = code_block.group(1).strip()
-    else:
-        brace_start = text.find("{")
-        if brace_start < 0:
-            raise json.JSONDecodeError("No JSON found", text, 0)
-        depth = 0
-        json_end = brace_start
-        for i in range(brace_start, len(text)):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    json_end = i + 1
-                    break
-        json_str = text[brace_start:json_end]
-
-    return json.loads(json_str)
+DEFAULT_LLM_MODEL = "google/gemini-2.5-flash"
 
 
-def translate_subtask(
-    subtask: str,
-    scene_graph: SceneGraph,
-    llm_model: str = DEFAULT_LLM_MODEL,
-    api_key: Optional[str] = None,
-) -> DSLAction:
+def translate_subtask(llm_response, subtask: str, scene_graph: SceneGraph) -> DSLAction:
     """
     Translate a natural language subtask into a DSL action using an LLM.
 
@@ -147,44 +123,39 @@ def translate_subtask(
     Returns:
         DSLAction -- the translated action (or INVALID with reasoning).
     """
-    sg_json = scene_graph.to_json(indent=2)
-
     user_prompt = TRANSLATOR_USER_TEMPLATE.format(
-        scene_graph_json=sg_json,
-        subtask=subtask,
+        scene_graph_json=scene_graph.to_json(indent=2),
+        subtask=subtask
     )
+    t0 = time.monotonic()
+    print(f"  [LLM] Querying LLM for subtask translation...")
+    yield [ transformers_api.make_message(user_prompt) ]
 
-    print(f"  [LLM] Querying {llm_model} for subtask translation...")
-    raw_response = query_llm(
-        prompt=user_prompt,
-        system_prompt=TRANSLATOR_SYSTEM_PROMPT,
-        model=llm_model,
-        api_key=api_key,
-        temperature=0.1,
-    )
-    print(f"  [LLM] Response received ({len(raw_response)} chars)")
-
+    raw_response = llm_response['content']
     try:
-        result = _extract_json(raw_response)
+        result = extract_json_from_response(raw_response)
     except (json.JSONDecodeError, ValueError) as e:
         print(f"  [LLM] WARNING: Failed to parse response: {e}")
         print(f"  [LLM] Raw: {raw_response[:500]}")
-        return DSLAction(
+        yield DSLAction(
             action_type="INVALID",
             reasoning=f"LLM returned unparseable response: {str(e)}",
         )
+    t1 = time.monotonic()
+    print(f"  [LLM] Time elapsed: {t1 - t0}")
 
     if result.get("valid", False):
-        return DSLAction(
+        yield DSLAction(
             action_type=result.get("action", "INVALID"),
             params=result.get("params", {}),
             reasoning=result.get("reasoning", ""),
             object_resolution=result.get("object_resolution", ""),
         )
     else:
-        return DSLAction(
+        yield DSLAction(
             action_type="INVALID",
             params=result.get("params", {}),
             reasoning=result.get("reasoning", "Marked invalid by translator"),
             object_resolution=result.get("object_resolution", ""),
         )
+translate_subtask.system_prompt = TRANSLATOR_SYSTEM_PROMPT

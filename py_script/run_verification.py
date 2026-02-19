@@ -19,12 +19,16 @@ import os
 import sys
 from pathlib import Path
 
+import mediapy
+import requests
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from vla_verify.verifier import VLAVerifier
 from vla_verify.scene_graph import SceneGraph
 
+from llm_apis.llm_tool import LLMTool
 
 def load_subtask_samples(path: Path):
     """
@@ -59,6 +63,92 @@ def get_unique_samples(samples):
     return unique
 
 
+def get_openrouter_interfaces():
+    """
+    Set up VLM and LLM models via an OpenRouter interface.
+    """
+    from llm_apis.llm_tool import OpenRouterTool
+    print("Using OpenRouter")
+    VLM_MODEL = "google/gemini-2.5-pro"
+    LLM_MODEL = "google/gemini-2.5-flash"
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        print("ERROR: OPENROUTER_API_KEY not set.")
+        print('  export OPENROUTER_API_KEY="sk-or-v1-..."')
+        sys.exit(1)
+
+    print(f"  LLM: {LLM_MODEL}")
+    print(f"  VLM: {VLM_MODEL}")
+    llm_interface = LLMTool.make_factory(OpenRouterTool, LLM_MODEL, api_key, temperature=0.1)
+    vlm_interface = LLMTool.make_factory(OpenRouterTool, VLM_MODEL, api_key, temperature=0.1)
+    return llm_interface, vlm_interface
+
+def get_ollama_interfaces():
+    """
+    Set up VLM and LLM models via the Ollama interface.
+    """
+    from llm_apis.llm_tool import OllamaTool
+    from ollama import Client
+    print("Using Ollama")
+
+    base_url = "http://localhost:11434"
+    VLM_MODEL = "gemma3:27b"
+    LLM_MODEL = "gemma3:27b"
+    context_length = 2400
+
+    if requests.get(base_url).status_code == 200:
+        client = Client(host=base_url)
+        api_return = client.list()
+        avail_models = [model['model'] for model in api_return['models']]
+    else:
+        print("ERROR: Ollama is not running")
+        sys.exit(1)
+
+    if LLM_MODEL not in avail_models:
+        print(f"ERROR: Model {LLM_MODEL} is not available (out of {avail_models})")
+        sys.exit(2)
+    if VLM_MODEL not in avail_models:
+        print(f"ERROR: Model {VLM_MODEL} is not available (out of {avail_models})")
+        sys.exit(3)
+
+    print(f"  LLM: {LLM_MODEL}")
+    print(f"  VLM: {VLM_MODEL}")
+    llm_interface = LLMTool.make_factory(OllamaTool, client, model=LLM_MODEL, keep_alive=-1, 
+                                         options=dict(num_ctx=context_length, temperature=0.1))
+    vlm_interface = LLMTool.make_factory(OllamaTool, client, model=VLM_MODEL, keep_alive=-1, 
+                                         options=dict(num_ctx=context_length, temperature=0.1))
+    return llm_interface, vlm_interface
+
+
+def get_r4b_interfaces():
+    """
+    Set up VLM and LLM models via Huggingface Transformers.
+    Only tested for R4B. Likely to break for others due to thinking mode arguments
+    """
+    from llm_apis.llm_tool import TransformersTool
+    from transformers import AutoModel, AutoProcessor
+    import torch
+    print("Using Transformers API")
+
+    model_path = "YannQi/R-4B"
+
+    # Load model
+    model = AutoModel.from_pretrained(
+        model_path,
+        torch_dtype=torch.float32,
+        trust_remote_code=True,
+    ).to("cuda")
+
+    # Load processor
+    processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+
+    print(f"  VLM (and LLM): {model_path}")
+    llm_interface = LLMTool.make_factory(TransformersTool, model, processor)
+    vlm_interface = llm_interface
+    return llm_interface, vlm_interface
+
+
 def main():
     # ── Configuration ────────────────────────────────────────────────
     # IMAGE_PATH = SCRIPT_DIR / "trial_imgs_0" / "frame_agentview10.png"
@@ -67,16 +157,6 @@ def main():
     SUBTASK_PATH = SCRIPT_DIR / "scene_graph_test_subtasks.txt"            # generatedsubtask samples
     # SUBTASK_PATH = SCRIPT_DIR / "subtask_samples.txt"
 
-    VLM_MODEL = "google/gemini-2.5-pro"
-    LLM_MODEL = "google/gemini-2.5-flash"
-
-    # ── Pre-flight checks ────────────────────────────────────────────
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
-        print("ERROR: OPENROUTER_API_KEY not set.")
-        print('  export OPENROUTER_API_KEY="sk-or-v1-..."')
-        sys.exit(1)
-
     if not IMAGE_PATH.is_file():
         print(f"ERROR: Image not found: {IMAGE_PATH}")
         sys.exit(1)
@@ -84,22 +164,25 @@ def main():
         print(f"ERROR: Subtask samples not found: {SUBTASK_PATH}")
         sys.exit(1)
 
+    print("[STEP 0] Loading LLM interfaces...")
+
+    #llm_interface, vlm_interface = get_openrouter_interfaces()
+    #llm_interface, vlm_interface = get_ollama_interfaces()
+    llm_interface, vlm_interface = get_r4b_interfaces()
+
     print("=" * 70)
     print("VLA Subtask Verification Framework -- First Layer (Scene Graph)")
     print("=" * 70)
 
     # ── Step 1: Construct scene graph ────────────────────────────────
     print("\n[STEP 1] Constructing scene graph from image...")
-    print(f"  Image: {IMAGE_PATH}")
-    print(f"  VLM:   {VLM_MODEL}")
 
     verifier = VLAVerifier(
-        vlm_model=VLM_MODEL,
-        llm_model=LLM_MODEL,
-        api_key=api_key,
+        llm_interface=llm_interface,
+        vlm_interface=vlm_interface
     )
 
-    scene_graph = verifier.construct_scene_graph(IMAGE_PATH)
+    scene_graph = verifier.construct_scene_graph(mediapy.read_image(IMAGE_PATH))
     print("\n" + scene_graph.summary())
 
     sg_save = SCRIPT_DIR / "constructed_scene_graph.json"
@@ -120,7 +203,7 @@ def main():
     print(f"    Unlabeled:   {n_unlabeled}")
 
     # ── Step 3: Verify each subtask ──────────────────────────────────
-    print(f"\n[STEP 3] Running verification (LLM: {LLM_MODEL})...")
+    print(f"\n[STEP 3] Running verification...")
     print("=" * 70)
 
     results = []

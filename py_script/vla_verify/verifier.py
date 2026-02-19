@@ -19,14 +19,17 @@ Design principles:
 """
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
+import time
 from typing import Optional
 
+import numpy as np
+
 from .scene_graph import SceneGraph
-from .scene_graph_constructor import construct_scene_graph as _construct_sg
-from .subtask_translator import translate_subtask
+from . import scene_graph_constructor
+from . import subtask_translator
 from .dsl import DSLAction, VerificationResult, verify_and_apply
-from .openrouter_client import DEFAULT_VLM_MODEL, DEFAULT_LLM_MODEL
 
 
 @dataclass
@@ -75,29 +78,17 @@ class VLAVerifier:
         print(result.summary())
     """
 
-    def __init__(
-        self,
-        vlm_model: str = DEFAULT_VLM_MODEL,
-        llm_model: str = DEFAULT_LLM_MODEL,
-        api_key: Optional[str] = None,
-    ):
-        self.vlm_model = vlm_model
-        self.llm_model = llm_model
-        self.api_key = api_key
+    def __init__(self, llm_interface, vlm_interface):
         self.scene_graph: Optional[SceneGraph] = None
 
-    def construct_scene_graph(self, image_path: Path) -> SceneGraph:
-        """Construct the initial scene graph from an image using a VLM."""
-        self.scene_graph = _construct_sg(
-            image_path=image_path,
-            vlm_model=self.vlm_model,
-            api_key=self.api_key,
-        )
-        return self.scene_graph
+        # Dynamically build VLM and LLM requiring functions.
+        self.scene_graph_from_image = vlm_interface(scene_graph_constructor.scene_graph_from_image)
+        self.translate_subtask = llm_interface(subtask_translator.translate_subtask)
 
-    def load_scene_graph(self, scene_graph: SceneGraph):
-        """Load a pre-constructed scene graph (e.g., from JSON)."""
-        self.scene_graph = scene_graph
+    def construct_scene_graph(self, image_rgb: np.ndarray) -> SceneGraph:
+        """Construct the initial scene graph from an image using a VLM."""
+        self.scene_graph = self.scene_graph_from_image(image_rgb)
+        return self.scene_graph
 
     def verify_subtask(
         self, subtask: str, update_state: bool = False,
@@ -116,17 +107,12 @@ class VLAVerifier:
         if self.scene_graph is None:
             raise RuntimeError(
                 "Scene graph not initialized. "
-                "Call construct_scene_graph() or load_scene_graph() first."
+                "Call construct_scene_graph() first."
             )
 
         scene_before = self.scene_graph.to_dict()
 
-        dsl_action = translate_subtask(
-            subtask=subtask,
-            scene_graph=self.scene_graph,
-            llm_model=self.llm_model,
-            api_key=self.api_key,
-        )
+        dsl_action = self.translate_subtask(subtask=subtask, scene_graph=self.scene_graph)
 
         verification = verify_and_apply(dsl_action, self.scene_graph)
 
@@ -144,10 +130,3 @@ class VLAVerifier:
             scene_graph_after=scene_after,
         )
 
-    def get_scene_graph(self) -> Optional[SceneGraph]:
-        """Return the current scene graph."""
-        return self.scene_graph
-
-    def reset_scene_graph(self, scene_graph: SceneGraph):
-        """Reset the scene graph to a given state."""
-        self.scene_graph = scene_graph

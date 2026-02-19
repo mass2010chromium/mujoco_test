@@ -9,6 +9,7 @@ logs/
 tmp*
 *.mp4
 *.png
+*.json
 
 __pycache__
 .ipynb_checkpoints

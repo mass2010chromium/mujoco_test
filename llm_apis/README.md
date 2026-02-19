@@ -6,6 +6,9 @@ Call LLMs locally (or network) through ollama, or with huggingface Transformers 
 
 Support is uneven and implemented on an as-needed basis...
 
+The Transformers api was build off the R-4B model, and has not been tested for other models.
+The ollama and OpenRouter interfaces should be more robust.
+
 ## Install
 
 ```bash
@@ -73,7 +76,9 @@ print(resp)
 
 ## Example llm-as-function
 
-Example is given using Transformers. Currently, OpenRouter and HuggingFace/Transformers api supported.
+Example is given using Transformers. Currently, Ollama, OpenRouter and HuggingFace/Transformers api are supported.
+
+Basic example:
 
 ```python
 import torch
@@ -91,8 +96,9 @@ model = AutoModel.from_pretrained(
 # Load processor
 processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
 
-from llm_apis.llm_tool import TransformersJsonTool
+from llm_apis.llm_tool import TransformersTool, extract_json_from_response
 from llm_apis import transformers_api
+
 prompt = """
 You are a calculator assistant.
 The user will give you a calculation problem, you should return a JSON response of the following form:
@@ -101,18 +107,41 @@ The user will give you a calculation problem, you should return a JSON response 
     "result": <result as string>,
     "explanation": <explanation in english>
 }
-
-The problem is:
 """
+def _calculate(llm_response, input_string):
+    
+    # These functions will be funny. They "return" twice.
+    # The first time, the yielded value must be a List of messages, of the form:
+    # {
+    #   "role": <role>,
+    #   "content": [
+    #     {"type": "image"|"text", ...},
+    #     {"type": "text", "text": "hello"},
+    #     {"type": "image", "image": <image_rgb>}
+    #   ]
+    # }
+    # (Yes, each message itself has a list of contents. Deal with it.)
+    # This is fed to the LLM, which returns its response via the first function argument,
+    #   which is a dictionary of the form
+    # {
+    #   "content": <text_content>
+    # }
+    # When this function gets "compiled", the first argument is hidden from the end user.
+    # So it is called only with its second argument. See the invocations below
 
-# Must return a List of messages
-def _calculate(input_string):
-    return [ transformers_api.make_message(input_string) ]
+    # First return: Yield the list of messages (just one string message today)
+    yield [ transformers_api.make_message(input_string) ]
 
-calculate = TransformersJsonTool(prompt, _calculate, model, processor)
+    # Process output from LLM, and return to user
+    raw_response = llm_response['content']
+    yield extract_json_from_response(raw_response)
+# Set the "system prompt" for this LLM.
+_calculate.system_prompt = prompt
+
+calculate = TransformersTool(_calculate, model, processor)
 
 print(calculate("Whats 1+1?"))
 print(calculate("Give a rational approximation of Pi"))
 ```
 
-
+See other more advanced llm-as-tool usage in the `examples` folder.
