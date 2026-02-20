@@ -166,9 +166,9 @@ def main():
 
     print("[STEP 0] Loading LLM interfaces...")
 
-    #llm_interface, vlm_interface = get_openrouter_interfaces()
+    llm_interface, vlm_interface = get_openrouter_interfaces()
     #llm_interface, vlm_interface = get_ollama_interfaces()
-    llm_interface, vlm_interface = get_r4b_interfaces()
+    #llm_interface, vlm_interface = get_r4b_interfaces()
 
     print("=" * 70)
     print("VLA Subtask Verification Framework -- First Layer (Scene Graph)")

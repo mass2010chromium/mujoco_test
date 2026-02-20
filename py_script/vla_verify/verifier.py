@@ -26,11 +26,12 @@ from typing import Optional
 
 import numpy as np
 
-from .scene_graph import SceneGraph
-from . import scene_graph_constructor
-from . import subtask_translator
-from .dsl import DSLAction, VerificationResult, verify_and_apply
+from llm_apis.llm_tool import extract_json_from_response
+from llm_apis import transformers_api
 
+from .scene_graph import SceneGraph, SceneNode
+from . import prompts
+from .dsl import DSLAction, VerificationResult, verify_and_apply
 
 @dataclass
 class SubtaskVerificationResult:
@@ -82,13 +83,133 @@ class VLAVerifier:
         self.scene_graph: Optional[SceneGraph] = None
 
         # Dynamically build VLM and LLM requiring functions.
-        self.scene_graph_from_image = vlm_interface(scene_graph_constructor.scene_graph_from_image)
-        self.translate_subtask = llm_interface(subtask_translator.translate_subtask)
+        self.construct_scene_graph = vlm_interface(self._construct_scene_graph)
+        self.translate_subtask = llm_interface(self._translate_subtask)
 
-    def construct_scene_graph(self, image_rgb: np.ndarray) -> SceneGraph:
-        """Construct the initial scene graph from an image using a VLM."""
-        self.scene_graph = self.scene_graph_from_image(image_rgb)
-        return self.scene_graph
+    def _construct_scene_graph(self, llm_response, image_rgb: np.ndarray):
+        """
+        Construct a scene graph from an image using a Vision-Language Model (VLM).
+
+        The VLM analyzes the initial camera observation and produces a structured
+        scene graph following our schema. This provides the initial symbolic state
+        before any actions are applied.
+
+        The prompt design is informed by:
+          - SayPlan's scene graph representation (nodes with type, state, affordances,
+            attributes; edges with spatial relations).
+          - ConceptGraphs' object-centric approach (detailed captions, spatial reasoning).
+        """
+        t0 = time.monotonic()
+        print(f"  [VLM] Querying VLM for scene graph construction...")
+        yield [ transformers_api.make_message(images=[image_rgb]) ]
+
+        raw_response = llm_response['content']
+        try:
+            scene_graph_json = extract_json_from_response(raw_response)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"  [VLM] WARNING: Failed to parse JSON: {e}")
+            print(f"  [VLM] Raw response (first 2000 chars):\n{raw_response[:2000]}")
+            raise ValueError(f"VLM returned invalid JSON: {e}") from e
+        t1 = time.monotonic()
+        print(f"  [VLM] Time elapsed: {t1 - t0}")
+        sg = SceneGraph.from_dict(scene_graph_json)
+
+        # Postprocessing to fix common VLM issues
+        # Ensure an agent node exists
+        agent = sg.get_agent_node()
+        if not agent:
+            sg.add_node(SceneNode(
+                id="robot_gripper",
+                name="robot gripper",
+                node_type="agent",
+                attributes={},
+                state={"gripper_empty": True},
+                affordances=[],
+                location_description="above the workspace",
+            ))
+        else:
+            if "gripper_empty" not in agent.state:
+                agent.state["gripper_empty"] = True
+
+        for node in sg.nodes.values():
+            # Ensure movable objects have the held state
+            if node.node_type == "object":
+                if "held" not in node.state:
+                    node.state["held"] = False
+                if "pick_up" not in node.affordances:
+                    node.affordances.append("pick_up")
+
+            # Ensure surfaces support placement
+            if node.node_type == "surface":
+                if "place_on" not in node.affordances:
+                    node.affordances.append("place_on")
+
+            # Ensure assets that look like containers have container affordances
+            if node.node_type == "asset":
+                has_open_state = "open" in node.state
+                if has_open_state:
+                    if "open" not in node.affordances:
+                        node.affordances.append("open")
+                    if "close" not in node.affordances:
+                        node.affordances.append("close")
+                    if "place_in" not in node.affordances:
+                        node.affordances.append("place_in")
+        self.scene_graph = sg
+        yield sg
+    _construct_scene_graph.system_prompt = prompts.SCENE_GRAPH_PROMPT
+
+    def _translate_subtask(self, llm_response, subtask: str, scene_graph: SceneGraph) -> DSLAction:
+        """
+        Translate a natural language subtask into a DSL action using an LLM.
+
+        The LLM receives only text (scene graph JSON + subtask string),
+        ensuring the first-layer verification is purely language-based.
+
+        Args:
+            subtask: Natural language subtask from VLA model.
+            scene_graph: Current scene graph state (provides context).
+            llm_model: OpenRouter model ID for the translation LLM.
+            api_key: OpenRouter API key.
+
+        Returns:
+            DSLAction -- the translated action (or INVALID with reasoning).
+        """
+        user_prompt = prompts.TRANSLATOR_USER_TEMPLATE.format(
+            scene_graph_json=scene_graph.to_json(indent=2),
+            subtask=subtask
+        )
+        t0 = time.monotonic()
+        print(f"  [LLM] Querying LLM for subtask translation...")
+        yield [ transformers_api.make_message(user_prompt) ]
+
+        raw_response = llm_response['content']
+        try:
+            result = extract_json_from_response(raw_response)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"  [LLM] WARNING: Failed to parse response: {e}")
+            print(f"  [LLM] Raw: {raw_response[:500]}")
+            yield DSLAction(
+                action_type="INVALID",
+                reasoning=f"LLM returned unparseable response: {str(e)}",
+            )
+        t1 = time.monotonic()
+        print(f"  [LLM] Time elapsed: {t1 - t0}")
+
+        if result.get("valid", False):
+            yield DSLAction(
+                action_type=result.get("action", "INVALID"),
+                params=result.get("params", {}),
+                reasoning=result.get("reasoning", ""),
+                object_resolution=result.get("object_resolution", ""),
+            )
+        else:
+            yield DSLAction(
+                action_type="INVALID",
+                params=result.get("params", {}),
+                reasoning=result.get("reasoning", "Marked invalid by translator"),
+                object_resolution=result.get("object_resolution", ""),
+            )
+    _translate_subtask.system_prompt = prompts.TRANSLATOR_SYSTEM_PROMPT
 
     def verify_subtask(
         self, subtask: str, update_state: bool = False,

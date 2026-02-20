@@ -1,26 +1,78 @@
 """
-Translate natural language subtasks (from VLA) into scene graph DSL actions.
-
-Uses an LLM (text-only, no vision) to parse the subtask, ground it in the
-scene graph, and produce a structured DSL action for verification.
-
-The translation LLM receives:
-  1. The current scene graph (JSON) for context and object resolution.
-  2. The natural language subtask from the VLA model.
-
-It outputs a DSL action or marks the subtask as INVALID with reasoning.
+Prompts for VLM/LLMs to use.
+Moving here to be obtrusive in other python files
 """
 
-import json
-import re
-import time
-from typing import Optional
+SCENE_GRAPH_PROMPT = """\
+You are a scene analysis system for a robotic manipulation workspace. \
+Given an image of a tabletop scene with a robot arm, construct a detailed \
+scene graph in JSON format.
 
-from llm_apis.llm_tool import extract_json_from_response
-from llm_apis import transformers_api
+The scene graph must capture ALL visible entities and their spatial \
+relationships. This will be used to verify robot action plans, so accuracy \
+and completeness are critical.
 
-from .dsl import DSLAction
-from .scene_graph import SceneGraph
+For each node, provide these fields:
+- "id": unique snake_case identifier (e.g., "black_bowl_1", "wooden_table"). \
+Use numbered suffixes when there are multiple similar objects.
+- "name": human-readable name (e.g., "black bowl", "wooden table")
+- "node_type": one of:
+  * "object" - movable items the robot can pick up (bowls, cups, blocks, etc.)
+  * "asset" - immovable fixtures (cabinets, drawers, shelves - can be \
+opened/closed but not picked up)
+  * "surface" - flat support surfaces (table, counter)
+  * "agent" - the robot arm/gripper
+- "attributes": dict of visual properties, e.g. \
+{"color": "black", "material": "ceramic", "size": "small", "shape": "round"}
+- "state": dict of current state:
+  * For containers/drawers: {"open": true/false}
+  * For the agent gripper: {"gripper_empty": true/false}
+  * For objects: {"held": false} (nothing is held initially)
+- "affordances": list from: \
+["pick_up", "place_on", "place_in", "open", "close", "push"]
+  * Movable objects: ["pick_up"]
+  * Flat surfaces / plates: ["place_on"]
+  * Containers with openable lids/drawers: ["place_in", "open", "close"]
+  * Objects that also serve as surfaces (e.g., plate): ["pick_up", "place_on"]
+- "location_description": brief text describing spatial position in the scene
+
+For each edge (relationship), provide:
+- "source": node id of the entity being described
+- "target": node id of the reference entity
+- "relation": one of "on", "in", "next_to", "part_of", "holding", "near"
+  * "on" - source rests on top of target
+  * "in" - source is inside target
+  * "next_to" - source is adjacent to target
+  * "part_of" - source is a structural component of target
+  * "near" - source is in the vicinity of target
+
+IMPORTANT GUIDELINES:
+1. List EVERY visible object, even small or partially occluded ones.
+2. Distinguish similar objects with numbered IDs \
+(e.g., "black_bowl_1", "black_bowl_2").
+3. Include the robot arm as an agent node with id "robot_gripper" and \
+state {"gripper_empty": true}.
+4. ONLY include objects you can actually see - do NOT hallucinate objects.
+5. For drawers/cabinets, note whether they are open or closed.
+6. Be precise about colors and object types.
+
+Output ONLY valid JSON (no markdown fences, no explanation) with this structure:
+{
+  "nodes": [
+    {
+      "id": "example_object_1",
+      "name": "example object",
+      "node_type": "object",
+      "attributes": {"color": "red", "material": "plastic"},
+      "state": {"held": false},
+      "affordances": ["pick_up"],
+      "location_description": "on the left side of the table"
+    }
+  ],
+  "edges": [
+    {"source": "example_object_1", "target": "table", "relation": "on"}
+  ]
+}"""
 
 
 TRANSLATOR_SYSTEM_PROMPT = """\
@@ -103,59 +155,3 @@ If INVALID:
 {{"valid": false, "action": "INVALID", "params": {{}}, \
 "object_resolution": "", \
 "reasoning": "specific explanation of what is wrong"}}"""
-
-DEFAULT_LLM_MODEL = "google/gemini-2.5-flash"
-
-
-def translate_subtask(llm_response, subtask: str, scene_graph: SceneGraph) -> DSLAction:
-    """
-    Translate a natural language subtask into a DSL action using an LLM.
-
-    The LLM receives only text (scene graph JSON + subtask string),
-    ensuring the first-layer verification is purely language-based.
-
-    Args:
-        subtask: Natural language subtask from VLA model.
-        scene_graph: Current scene graph state (provides context).
-        llm_model: OpenRouter model ID for the translation LLM.
-        api_key: OpenRouter API key.
-
-    Returns:
-        DSLAction -- the translated action (or INVALID with reasoning).
-    """
-    user_prompt = TRANSLATOR_USER_TEMPLATE.format(
-        scene_graph_json=scene_graph.to_json(indent=2),
-        subtask=subtask
-    )
-    t0 = time.monotonic()
-    print(f"  [LLM] Querying LLM for subtask translation...")
-    yield [ transformers_api.make_message(user_prompt) ]
-
-    raw_response = llm_response['content']
-    try:
-        result = extract_json_from_response(raw_response)
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"  [LLM] WARNING: Failed to parse response: {e}")
-        print(f"  [LLM] Raw: {raw_response[:500]}")
-        yield DSLAction(
-            action_type="INVALID",
-            reasoning=f"LLM returned unparseable response: {str(e)}",
-        )
-    t1 = time.monotonic()
-    print(f"  [LLM] Time elapsed: {t1 - t0}")
-
-    if result.get("valid", False):
-        yield DSLAction(
-            action_type=result.get("action", "INVALID"),
-            params=result.get("params", {}),
-            reasoning=result.get("reasoning", ""),
-            object_resolution=result.get("object_resolution", ""),
-        )
-    else:
-        yield DSLAction(
-            action_type="INVALID",
-            params=result.get("params", {}),
-            reasoning=result.get("reasoning", "Marked invalid by translator"),
-            object_resolution=result.get("object_resolution", ""),
-        )
-translate_subtask.system_prompt = TRANSLATOR_SYSTEM_PROMPT
