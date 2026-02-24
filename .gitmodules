@@ -14,3 +14,6 @@
 	path = sam3
 	url = https://github.com/facebookresearch/sam3.git
     ignore = dirty
+[submodule "pace/openpi"]
+	path = pace/openpi
+	url = https://github.com/IvanIZ/openpi.git
