@@ -120,7 +120,7 @@ def prompt_from_obs(obs, task, scene_plan=''):
         'observation/image': obs['agentview_image'][::-1, ::-1, :],
         'observation/wrist_image': obs['robot0_eye_in_hand_image'][::-1, ::-1, :],
         "observation/state": state_vec,
-        "state": state_vec,  # required by LiberoReasonInputs
+        #"state": state_vec,  # required by LiberoReasonInputs
         'prompt': task,
         'thought': [thought_prefix],
     }
