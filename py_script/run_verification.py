@@ -19,16 +19,16 @@ import os
 import sys
 from pathlib import Path
 
-import mediapy
+import cv2
 import requests
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from vla_verify.verifier import VLAVerifier
-from vla_verify.scene_graph import SceneGraph
+from vla_verify.scene_graph import TaskSceneGraph
 
-from llm_apis.llm_tool import LLMTool
+from vlm_interfaces import *
 
 def load_subtask_samples(path: Path):
     """
@@ -63,99 +63,15 @@ def get_unique_samples(samples):
     return unique
 
 
-def get_openrouter_interfaces():
-    """
-    Set up VLM and LLM models via an OpenRouter interface.
-    """
-    from llm_apis.llm_tool import OpenRouterTool
-    print("Using OpenRouter")
-    VLM_MODEL = "google/gemini-2.5-pro"
-    LLM_MODEL = "google/gemini-2.5-flash"
-
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
-        print("ERROR: OPENROUTER_API_KEY not set.")
-        print('  export OPENROUTER_API_KEY="sk-or-v1-..."')
-        sys.exit(1)
-
-    print(f"  LLM: {LLM_MODEL}")
-    print(f"  VLM: {VLM_MODEL}")
-    llm_interface = LLMTool.make_factory(OpenRouterTool, LLM_MODEL, api_key, temperature=0.1)
-    vlm_interface = LLMTool.make_factory(OpenRouterTool, VLM_MODEL, api_key, temperature=0.1)
-    return llm_interface, vlm_interface
-
-def get_ollama_interfaces():
-    """
-    Set up VLM and LLM models via the Ollama interface.
-    """
-    from llm_apis.llm_tool import OllamaTool
-    from ollama import Client
-    print("Using Ollama")
-
-    base_url = "http://localhost:11434"
-    VLM_MODEL = "gemma3:27b"
-    LLM_MODEL = "gemma3:27b"
-    context_length = 2400
-
-    if requests.get(base_url).status_code == 200:
-        client = Client(host=base_url)
-        api_return = client.list()
-        avail_models = [model['model'] for model in api_return['models']]
-    else:
-        print("ERROR: Ollama is not running")
-        sys.exit(1)
-
-    if LLM_MODEL not in avail_models:
-        print(f"ERROR: Model {LLM_MODEL} is not available (out of {avail_models})")
-        sys.exit(2)
-    if VLM_MODEL not in avail_models:
-        print(f"ERROR: Model {VLM_MODEL} is not available (out of {avail_models})")
-        sys.exit(3)
-
-    print(f"  LLM: {LLM_MODEL}")
-    print(f"  VLM: {VLM_MODEL}")
-    llm_interface = LLMTool.make_factory(OllamaTool, client, model=LLM_MODEL, keep_alive=-1, 
-                                         options=dict(num_ctx=context_length, temperature=0.1))
-    vlm_interface = LLMTool.make_factory(OllamaTool, client, model=VLM_MODEL, keep_alive=-1, 
-                                         options=dict(num_ctx=context_length, temperature=0.1))
-    return llm_interface, vlm_interface
-
-
-def get_r4b_interfaces():
-    """
-    Set up VLM and LLM models via Huggingface Transformers.
-    Only tested for R4B. Likely to break for others due to thinking mode arguments
-    """
-    from llm_apis.llm_tool import TransformersTool
-    from transformers import AutoModel, AutoProcessor
-    import torch
-    print("Using Transformers API")
-
-    model_path = "YannQi/R-4B"
-
-    # Load model
-    model = AutoModel.from_pretrained(
-        model_path,
-        torch_dtype=torch.float32,
-        trust_remote_code=True,
-    ).to("cuda")
-
-    # Load processor
-    processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
-
-    print(f"  VLM (and LLM): {model_path}")
-    llm_interface = LLMTool.make_factory(TransformersTool, model, processor)
-    vlm_interface = llm_interface
-    return llm_interface, vlm_interface
-
-
 def main():
     # ── Configuration ────────────────────────────────────────────────
     # IMAGE_PATH = SCRIPT_DIR / "trial_imgs_0" / "frame_agentview10.png"
-    IMAGE_PATH = SCRIPT_DIR / "scene_graph_test.png"                    # initial scene image
+    #IMAGE_PATH = SCRIPT_DIR / "scene_graph_test.png"                    # initial scene image
+    IMAGE_PATH = SCRIPT_DIR / "../not_libero.png"                    # initial scene image
 
     SUBTASK_PATH = SCRIPT_DIR / "scene_graph_test_subtasks.txt"            # generatedsubtask samples
     # SUBTASK_PATH = SCRIPT_DIR / "subtask_samples.txt"
+    PDDL_PATH = SCRIPT_DIR / "pddl" / "pick_place_domain.pddl"
 
     if not IMAGE_PATH.is_file():
         print(f"ERROR: Image not found: {IMAGE_PATH}")
@@ -177,18 +93,15 @@ def main():
     # ── Step 1: Construct scene graph ────────────────────────────────
     print("\n[STEP 1] Constructing scene graph from image...")
 
-    verifier = VLAVerifier(
-        llm_interface=llm_interface,
-        vlm_interface=vlm_interface
-    )
+    pddl_domain_text = open(PDDL_PATH).read()
+    scene_graph = TaskSceneGraph(pddl_domain_text, vlm_interface)
+    # Save some tokens for now
+    #llm_out = open('tmp').read()
+    #scene_graph.construct_from_pddl(mediapy.read_image(IMAGE_PATH), llm_out, ground=False)
+    scene_graph.read_image(cv2.cvtColor(cv2.imread(IMAGE_PATH), cv2.COLOR_BGR2RGB), ground=True)
+    print(scene_graph.summary())
 
-    scene_graph = verifier.construct_scene_graph(mediapy.read_image(IMAGE_PATH))
-    print("\n" + scene_graph.summary())
-
-    sg_save = SCRIPT_DIR / "constructed_scene_graph.json"
-    with open(sg_save, "w") as f:
-        f.write(scene_graph.to_json(indent=2))
-    print(f"\n  Scene graph saved to: {sg_save}")
+    verifier = VLAVerifier(scene_graph, llm_interface)
 
     # ── Step 2: Load subtask samples ─────────────────────────────────
     print("\n[STEP 2] Loading subtask samples...")
@@ -211,17 +124,10 @@ def main():
         label = " [KNOWN FALSE]" if is_labeled_false else ""
         print(f"\n--- Test {i+1}/{len(test_samples)}{label} ---")
 
-        result = verifier.verify_subtask(subtask, update_state=False)
+        result = verifier.verify_subtask(subtask)
         results.append((result, is_labeled_false))
 
         print(result.summary())
-
-        if result.accepted and result.scene_graph_after:
-            new_sg = SceneGraph.from_dict(result.scene_graph_after)
-            print(
-                f"  Resulting graph: {len(new_sg.nodes)} nodes, "
-                f"{len(new_sg.edges)} edges"
-            )
 
     # ── Step 4: Summary ──────────────────────────────────────────────
     print("\n" + "=" * 70)
@@ -272,12 +178,8 @@ def main():
             "subtask": result.subtask,
             "labeled_false": is_false,
             "accepted": result.accepted,
-            "dsl_action": result.dsl_action.action_type,
-            "dsl_params": result.dsl_action.params,
-            "reasoning": result.dsl_action.reasoning,
-            "object_resolution": result.dsl_action.object_resolution,
-            "verification_message": result.verification.message,
-            "failed_preconditions": result.verification.failed_preconditions,
+            "reason": result.reasoning,
+            "action": result.grounded_action
         })
     with open(results_save, "w") as f:
         json.dump(results_json, f, indent=2)

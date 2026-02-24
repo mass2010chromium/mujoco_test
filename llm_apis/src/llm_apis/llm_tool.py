@@ -1,38 +1,18 @@
 import copy
 import functools
-import json
 import re
 import textwrap
 
 import requests
 
 try:
-    from agent_responses import StringResponse, IntResponse, ImageResponse
-    import transformers_api
-except ImportError:
     from .agent_responses import StringResponse, IntResponse, ImageResponse
     from . import transformers_api
-
-def extract_json_from_response(text: str) -> dict:
-    """Extract JSON from a VLM response that may contain markdown fences."""
-    # Strip markdown code fences if present
-    code_block = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
-    if code_block:
-        json_str = code_block.group(1).strip()
-        return json.loads(json_str)
-
-    # NOTE: What if it's a list?
-    json_start = text.find("{")
-    if json_start < 0:
-        raise json.JSONDecodeError("No JSON object found", text, 0)
-    json_str = text[json_start:]
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        if x.msg == 'Extra data':
-            json_str = json_str[:e.pos]
-            return json.loads(json_str)
-        raise e
+    from .response_parsing import extract_json_from_response
+except ImportError:
+    from agent_responses import StringResponse, IntResponse, ImageResponse
+    import transformers_api
+    from response_parsing import extract_json_from_response
 
 def json_output(f):
     """
@@ -46,9 +26,12 @@ def json_output(f):
     return wrapper
 
 class LLMTool:
-    def __init__(self, function, system_prompt_role='system'):
+    def __init__(self, function, system_prompt=None, system_prompt_role='system'):
         # To define the system prompt, attach it to the function as function.system_prompt
-        self.system_prompt = function.system_prompt
+        if system_prompt:
+            self.system_prompt = system_prompt
+        else:
+            self.system_prompt = function.system_prompt
         # TODO: should this also be attached?
         self.system_prompt_role = system_prompt_role
         # The function should take one additional argument as the first position argument.
@@ -104,8 +87,11 @@ class LLMTool:
 
 class OllamaTool(LLMTool):
 
-    def __init__(self, function, client, model, system_prompt_role='system', **kwargs):
-        super().__init__(function, system_prompt_role)
+    def __init__(self, function, client, model,
+                 system_prompt=None,
+                 system_prompt_role='system',
+                 **kwargs):
+        super().__init__(function, system_prompt, system_prompt_role)
         # TODO: pass other kwargs
         self.client = client
         self.model = model
@@ -132,8 +118,11 @@ class OllamaTool(LLMTool):
 
 class TransformersTool(LLMTool):
 
-    def __init__(self, function, model, processor, system_prompt_role='system', max_new_tokens=16384):
-        super().__init__(function, system_prompt_role)
+    def __init__(self, function, model, processor,
+                 system_prompt=None,
+                 system_prompt_role='system',
+                 max_new_tokens=16384):
+        super().__init__(function, system_prompt, system_prompt_role)
         # TODO: pass other kwargs
         self.model = model
         self.processor = processor
@@ -153,9 +142,12 @@ class OpenRouterTool(LLMTool):
 
     OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-    def __init__(self, function, model, api_key, system_prompt_role='system',
-                 temperature: float = 0.2, timeout: int = 180):
-        super().__init__(function, system_prompt_role)
+    def __init__(self, function, model, api_key,
+                 system_prompt=None,
+                 system_prompt_role='system',
+                 temperature: float = 0.2,
+                 timeout: int = 180):
+        super().__init__(function, system_prompt, system_prompt_role)
         self.model = model
         self.api_key = api_key
         self.temperature = temperature

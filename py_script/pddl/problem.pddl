@@ -1,5 +1,5 @@
 (define (problem libero_spatial_0)
- (:domain libero_tabletop)
+ (:domain tabletop)
  (:objects
   arm - robot
   table - scene_object
@@ -8,7 +8,7 @@
   plate - scene_object
   ramekin - graspable
   cookies - graspable
-  drawers - openable
+  drawers - immovable
  )
  (:init
   (on bowl1 table)
@@ -17,8 +17,9 @@
   (on ramekin table)
   (on cookies table)
   (on drawers table)
+  (openable drawers)
   (closed drawers)
   (free arm)
  )
- (:goal (on bowl1 plate))
+ ;(:goal (on bowl1 plate))
 )

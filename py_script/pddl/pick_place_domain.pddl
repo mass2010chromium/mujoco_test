@@ -1,8 +1,8 @@
-(define (domain libero_tabletop)
+(define (domain tabletop)
  (:requirements :equality :typing :negative-preconditions)
  (:types
   scene_object
-  openable - scene_object
+  immovable - scene_object
   graspable - scene_object
 
   robot
@@ -11,9 +11,14 @@
  (:predicates 
   (carry ?r - robot ?x - scene_object)      ; Robot is carrying object
   (on ?x - scene_object ?y - scene_object)  ; x is on y
-  (free ?r - robot)                         ; robot has hands free.
-  (open ?x - openable)                      ; container is open
-  (closed ?x - openable)                    ; container is closed
+  (free ?r - robot)                         ; Robot has hands free.
+  (openable ?x - scene_object)              ; Affordance of being a container that can be open or closed.
+                                            ;   Represented as an attribute instead of a class, since either
+                                            ;   graspable or immovable objects can be openable...
+                                            ;   For example, a drawer or refridgerator.
+                                            ;   Openable objects must have exactly one of `open` or `closed` set.
+  (open ?x - scene_object)                  ; Container is open.
+  (closed ?x - scene_object)                ; Container is closed
  )
 
  (:action pickup_from ; Pick up object x from on object z.
@@ -47,30 +52,32 @@
  )
 
  (:action open  ; Open object x using robot gripper. Gripper must be free
-  :parameters (?x - openable ?r - robot)
-  :precondition
-  (and
-   (free ?r)
-   (open ?x)
-  )
-  :effect
-  (and
-   (not (open ?x))
-   (closed ?x)
-  )
- )
-
- (:action close ; Close object x using robot gripper. Gripper must be free
-  :parameters (?x - openable ?r - robot)
+  :parameters (?x - scene_object ?r - robot)
   :precondition
   (and
    (free ?r)
    (closed ?x)
+   (openable ?x)
   )
   :effect
   (and
    (not (closed ?x))
    (open ?x)
+  )
+ )
+
+ (:action close ; Close object x using robot gripper. Gripper must be free
+  :parameters (?x - scene_object ?r - robot)
+  :precondition
+  (and
+   (free ?r)
+   (open ?x)
+   (openable ?x)
+  )
+  :effect
+  (and
+   (not (open ?x))
+   (closed ?x)
   )
  )
 )
