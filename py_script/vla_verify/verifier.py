@@ -137,7 +137,14 @@ class VLAVerifier:
         Refer to the PDDL domain for the specifics of each action.
 
     You should translate the natural language task into the closest \
-    approximation of the requested subtask, in PDDL form.
+    approximation of the requested subtask, in PDDL form. Some color difference \
+    is allowed -- for example, the user may specify to pick up a pink cube when \
+    the scene graph only has red or blue cubes; in this case the red cube should \
+    be chosen. You should be lenient with shades of color, \
+    (accepting silver as white or grey as black, for example),
+    but you should reject translations that have different hues (red vs blue) \
+    or large differences in shade (white vs black).
+
     You should output a json object of this form:
 
     ```json

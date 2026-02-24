@@ -20,8 +20,8 @@ def get_openrouter_interfaces():
 
     print(f"  LLM: {LLM_MODEL}")
     print(f"  VLM: {VLM_MODEL}")
-    llm_interface = LLMTool.make_factory(OpenRouterTool, LLM_MODEL, api_key, temperature=0.1)
-    vlm_interface = LLMTool.make_factory(OpenRouterTool, VLM_MODEL, api_key, temperature=0.1)
+    llm_interface = LLMTool.make_factory(OpenRouterTool, LLM_MODEL, api_key, temperature=0.0)
+    vlm_interface = LLMTool.make_factory(OpenRouterTool, VLM_MODEL, api_key, temperature=0.0)
     return llm_interface, vlm_interface
 
 def get_ollama_interfaces():

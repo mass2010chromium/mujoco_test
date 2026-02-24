@@ -132,7 +132,7 @@ class ObjectGrounder:
                         other_mask = track['mask']
                         intersection = np.sum(mask * other_mask)
                         union = np.sum((mask + other_mask) != 0)
-                        if intersection/union > 0.9:
+                        if intersection > 0 and intersection/union > 0.9:
                             if score > np.max(track['scores']):
                                 del all_tracks[track['obj_id']]
                                 # Instead of adding a new object, update the score for the existing object
@@ -211,8 +211,8 @@ class ObjectGrounder:
                 # NOTE: CLIP is run for every mask individually, instead of batched.
                 # Can we increase speed if they are all batched together?
                 all_images = [track['crop'] for track in tracks]
-                inputs = clip_processor(text=objects, images=all_images, padding="max_length", return_tensors="pt")
-                outputs = clip_model(**inputs)
+                inputs = self.clip_processor(text=objects, images=all_images, padding="max_length", return_tensors="pt")
+                outputs = self.clip_model(**inputs)
                 logits_per_image = outputs.logits_per_image
                 clip_scores = torch.sigmoid(logits_per_image) # these are the probabilities
         else:

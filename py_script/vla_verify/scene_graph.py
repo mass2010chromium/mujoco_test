@@ -9,7 +9,6 @@ from llm_apis import transformers_api
 from llm_apis.response_parsing import extract_in_backticks
 
 from .pddl_parsing import setup_pddl_simulation
-from .object_grounder import ObjectGrounder, GroundingResult
 
 @dataclass
 class SceneObject:
@@ -17,7 +16,7 @@ class SceneObject:
     object_id: str      # Corresponding to object id in PDDL
     appearance: str     # LLM text description of object
                         # TODO: 3d location
-    grounding: GroundingResult = None
+    grounding = None
 
     def to_dict(self, include_grounding=True):
         res = {
@@ -51,8 +50,12 @@ class TaskSceneGraph:
 
     @property
     def grounder(self):
-        if self._grounder is None:
-            self._grounder = ObjectGrounder(*self._grounder_args)
+        try:
+            from .object_grounder import ObjectGrounder
+            if self._grounder is None:
+                self._grounder = ObjectGrounder(*self._grounder_args)
+        except ImportError:
+            print("WARNING: SAM 3 not installed. Grounding is disabled")
         return self._grounder
 
     def _read_image(self, llm_response, image_rgb, ground=True):
@@ -125,10 +128,10 @@ class TaskSceneGraph:
                 label_descriptions.append(f"a {appearance}")
                 object_ids.append(object_id)
 
-        if ground:
+        if ground and self.grounder is not None:
             video_data = [Image.fromarray(image_rgb)]
             # Much faster and seems more accurate than gemini.
-            mask_results = self.grounder.predict_masks_video(video_data, full_descriptions, label_descriptions, use_clip=False)
+            mask_results = self.grounder.predict_masks_video(video_data, full_descriptions, label_descriptions, use_clip=True)
             for object_id, result in zip(object_ids, mask_results):
                 self.object_data[object_id].grounding = result
 

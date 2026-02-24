@@ -66,8 +66,8 @@ def get_unique_samples(samples):
 def main():
     # ── Configuration ────────────────────────────────────────────────
     # IMAGE_PATH = SCRIPT_DIR / "trial_imgs_0" / "frame_agentview10.png"
-    #IMAGE_PATH = SCRIPT_DIR / "scene_graph_test.png"                    # initial scene image
-    IMAGE_PATH = SCRIPT_DIR / "../not_libero.png"                    # initial scene image
+    IMAGE_PATH = SCRIPT_DIR / "scene_graph_test.png"                    # initial scene image
+    #IMAGE_PATH = SCRIPT_DIR / "../not_libero.png"                    # initial scene image
 
     SUBTASK_PATH = SCRIPT_DIR / "scene_graph_test_subtasks.txt"            # generatedsubtask samples
     # SUBTASK_PATH = SCRIPT_DIR / "subtask_samples.txt"
