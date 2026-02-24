@@ -24,17 +24,11 @@ Key design principles:
     operations.
 """
 
-from .scene_graph import SceneGraph, SceneNode, SceneEdge
-from .dsl import DSLAction, VerificationResult, verify_and_apply
+from .scene_graph import TaskSceneGraph
 from .verifier import VLAVerifier, SubtaskVerificationResult
 
 __all__ = [
-    "SceneGraph",
-    "SceneNode",
-    "SceneEdge",
-    "DSLAction",
-    "VerificationResult",
-    "verify_and_apply",
+    "TaskSceneGraph",
     "VLAVerifier",
     "SubtaskVerificationResult",
 ]

@@ -1,0 +1,114 @@
+%import common.WS
+%import common.NUMBER
+
+COMMENT: /;.*/
+
+%ignore COMMENT
+%ignore WS
+
+IDENTIFIER: /[a-zA-Z][a-zA-Z0-9\-_]*/
+
+VARIABLE: "?" IDENTIFIER
+
+list_{item}: item*
+nonempty_list{item}: item+
+
+_domain_name: "(" "domain" IDENTIFIER ")"
+
+domain_requirement: ":strips"                    -> strips_requirement
+                  | ":typing"                    -> typing_requirement
+                  | ":disjunctive-preconditions" -> disjunctive_preconditions_requirement
+                  | ":negative-preconditions"    -> negative_preconditions_requirement
+                  | ":equality"                  -> equality_requirement
+                  | ":probabilistic-effects"     -> probabilistic_effects_requirement
+
+problem_requirement: ":fallible-actions" -> fallible_actions_requirement
+                   | ":revealables"      -> revealables_requirement
+                   | ":multiple-goals"   -> multiple_goals_requirement
+
+// We need the location of the requirements section, so this is separate
+REQUIREMENTS_KEYWORD: ":requirements"
+requirements_section{requirement}: "(" REQUIREMENTS_KEYWORD nonempty_list{requirement} ")"
+
+custom_type: IDENTIFIER
+
+object_type: "object"
+
+_type: object_type | custom_type
+
+typed_list_part{item}: nonempty_list{item} "-" _type
+typed_list{item}: typed_list_part{item} typed_list{item}
+                | list_{item}                              -> object_typed_list
+
+// We need the location of the types section in case `:typing` is not enabled
+TYPES_KEYWORD: ":types"
+types_section: "(" TYPES_KEYWORD typed_list{custom_type} ")"
+
+// `object` is reserved in Python
+object_: IDENTIFIER
+
+constants_section: "(" ":constants" typed_list{object_} ")"
+
+predicate_definition: "(" IDENTIFIER typed_list{VARIABLE} ")"
+predicates_section: "(" ":predicates" nonempty_list{predicate_definition} ")"
+
+predicate{argument}: "(" IDENTIFIER list_{argument} ")"
+
+// We need the location of or-conditions in case `:disjunctive-preconditions` is not enabled
+OR_KEYWORD: "or"
+// We need the location of not-conditions in case `:negation-preconditions` is not enabled
+NOT_KEYWORD: "not"
+// We need the location of equality predicates in case `:equality` is not enabled
+EQUALS_SIGN: "="
+?condition{argument}: "(" "and" list_{condition{argument}} ")"      -> and_condition
+                    | "(" OR_KEYWORD list_{condition{argument}} ")" -> or_condition
+                    | "(" NOT_KEYWORD condition{argument} ")"       -> not_condition
+                    | "(" EQUALS_SIGN argument argument ")"         -> equality_condition
+                    | predicate{argument}
+
+not_predicate{argument}: "(" "not" predicate{argument} ")"
+_atom{argument}: predicate{argument}
+               | not_predicate{argument}
+
+probabilistic_effect_pair{argument}: NUMBER effect{argument}
+// We need the location of probabilistic effects in case `:probabilistic-effects` was not enabled
+PROBABILISTIC_KEYWORD: "probabilistic"
+?effect{argument}: "(" "and" list_{effect{argument}} ")"                                   -> and_effect
+                | "(" PROBABILISTIC_KEYWORD list_{probabilistic_effect_pair{argument}} ")" -> probabilistic_effect
+                | _atom{argument}
+
+
+_argument: VARIABLE
+         | object_
+
+action_definition: "(" ":action" IDENTIFIER ":parameters" "(" typed_list{VARIABLE} ")" [":precondition" condition{_argument}] [":effect" effect{_argument}] ")"
+actions_section: list_{action_definition}
+
+domain: "(" "define" _domain_name [requirements_section{domain_requirement}] [types_section] [constants_section] [predicates_section] actions_section ")"
+
+_problem_name: "(" "problem" IDENTIFIER ")"
+
+_used_domain_name: "(" ":domain" IDENTIFIER ")"
+
+objects_section: "(" ":objects" typed_list{object_} ")"
+
+grounded_action_schematic: "(" IDENTIFIER list_{_argument} ")"
+ACTION_KEYWORD: ":action"
+action_fallibility: "(" ACTION_KEYWORD grounded_action_schematic ":on" NUMBER condition{object_} ")"
+FAIL_KEYWORD: ":fails"
+action_fallibilities_section: "(" FAIL_KEYWORD list_{action_fallibility} ")"
+
+WHEN_KEYWORD: "when"
+revealable: "(" WHEN_KEYWORD [NUMBER] condition{object_} effect{object_} ")"
+REVEAL_KEYWORD: ":reveals"
+revealables_section: "(" REVEAL_KEYWORD list_{revealable} ")"
+
+initialization_section: "(" ":init" list_{predicate{object_}} ")"
+
+dummy_goal_section: "(" ":goal" "(" "none" ")" ")"
+_goal_section: "(" ":goal" condition{object_} ")"
+GOALS_KEYWORD: ":goals"
+goals_section: "(" GOALS_KEYWORD list_{condition{object_}} ")"
+
+# Goals are optional
+problem: "(" "define" _problem_name _used_domain_name [[requirements_section{problem_requirement}]] [objects_section] [action_fallibilities_section] [revealables_section] [initialization_section] [_goal_section | goals_section | dummy_goal_section] ")"

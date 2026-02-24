@@ -1,260 +1,202 @@
-"""
-Scene graph data structures and operations for robotic manipulation verification.
+from dataclasses import dataclass
+import textwrap
+import time
 
-Inspired by:
-  - SayPlan (Rana et al., CoRL 2023): Hierarchical 3D scene graphs with
-    state transitions, node affordances, and predicates for robot task planning.
-  - ConceptGraphs (Gu et al., 2023): Open-vocabulary object-centric 3D scene
-    graphs with node captions and LLM-inferred edge relationships.
+import numpy as np
+from PIL import Image
 
-The scene graph represents the state of a manipulation workspace at a discrete
-symbolic timestep. Actions on the scene graph are state transitions with
-preconditions (checked before) and effects (applied after).
+from llm_apis import transformers_api
+from llm_apis.response_parsing import extract_in_backticks
 
-Hierarchy for tabletop manipulation:
-  workspace (root)
-    ├── surfaces (table, counter)
-    │   ├── objects (bowls, plates, blocks -- movable)
-    │   └── assets (cabinets, drawers -- immovable fixtures)
-    │       └── objects inside containers
-    └── agent (robot gripper)
-"""
-
-import copy
-import json
-from dataclasses import dataclass, field, asdict
-from typing import Optional
-
+from .pddl_parsing import setup_pddl_simulation
 
 @dataclass
-class SceneNode:
+class SceneObject:
+    object_type: str    # Corresponding to object type in PDDL
+    object_id: str      # Corresponding to object id in PDDL
+    appearance: str     # LLM text description of object
+                        # TODO: 3d location
+    grounding = None
+
+    def to_dict(self, include_grounding=True):
+        res = {
+            'type': self.object_type,
+            'id': self.object_id,
+            'appearance': self.appearance,
+        }
+        if include_grounding and self.grounding is not None:
+            res['grounding'] = self.grounding.to_dict()
+        return res
+
+class TaskSceneGraph:
     """
-    A node in the scene graph representing a physical entity.
-
-    Attributes:
-        id: Unique snake_case identifier (e.g., "black_bowl_1").
-        name: Human-readable name (e.g., "black bowl").
-        node_type: One of "object" (movable), "asset" (immovable fixture),
-                   "surface" (support surface), "agent" (robot).
-        attributes: Visual properties -- color, material, size, shape, etc.
-        state: Current state -- e.g., {"held": False}, {"open": True},
-               {"gripper_empty": True}.
-        affordances: Possible actions -- e.g., ["pick_up"], ["place_on"],
-                     ["open", "close", "place_in"].
-        location_description: Brief spatial description.
+    Scene graph grounded to an image and a PDDL representation.
     """
-    id: str
-    name: str
-    node_type: str
-    attributes: dict = field(default_factory=dict)
-    state: dict = field(default_factory=dict)
-    affordances: list = field(default_factory=list)
-    location_description: str = ""
+    DUMMY_PDDL_GOAL = "(:goal (free {robot}))"
+    def __init__(self, pddl_domain_desc: str, vlm_interface, gpus_to_use=[0]):
+        self.pddl_domain_desc = pddl_domain_desc
+        self.domain = None
+        self.init_state = None
+        self.simulator = None
+        self.object_data = None
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+        self.read_image = vlm_interface(
+            self._read_image,
+            system_prompt=TaskSceneGraph.READ_IMAGE_PROMPT.format(pddl_domain=pddl_domain_desc)
+        )
 
-    @classmethod
-    def from_dict(cls, d: dict) -> "SceneNode":
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        self._grounder = None
+        self._grounder_args = [gpus_to_use]
+
+    @property
+    def grounder(self):
+        try:
+            from .object_grounder import ObjectGrounder
+            if self._grounder is None:
+                self._grounder = ObjectGrounder(*self._grounder_args)
+        except ImportError:
+            print("WARNING: SAM 3 not installed. Grounding is disabled")
+        return self._grounder
+
+    def _read_image(self, llm_response, image_rgb, ground=True):
+        """
+        Read an RGB image with a VLM, output a PDDL domain file and parse that into a scene graph.
+        """
+        t0 = time.monotonic()
+        print(f"  [VLM] Querying VLM for scene graph construction...")
+        yield [ transformers_api.make_message(images=[image_rgb]) ]
+        t1 = time.monotonic()
+        print(f"  [VLM] Time elapsed: {t1 - t0}")
+
+        # Strip triple backticks
+        raw_response = llm_response['content']
+        response = extract_in_backticks(raw_response, 'pddl')
+        if response is None:
+            print("Warning: No triple backticks given")
+            response = raw_response
+
+        yield self.construct_from_pddl(image_rgb, response, ground=ground)
+    READ_IMAGE_PROMPT = textwrap.dedent("""\
+    The following is a PDDL domain description for a generic pick and place task:
+
+    ```pddl
+    {pddl_domain}
+    ```
+
+    Given an image, detect the relevant objects in the image, and output a
+    corresponding PDDL problem file for this image. Omit the `goal` clause.
+    Define each distinct object on its own line, using comments to add descriptions
+    in the following format, separated by a vertical bar:
+
+    <object appearance> | <object location>
+
+    The robot should be called `robot_0` and have no description comment.
+
+    """)
+
+    def construct_from_pddl(self, image_rgb, raw_pddl_state, ground=True):
+        self.init_state, self.domain, self.simulator = setup_pddl_simulation(
+            raw_pddl_state, self.pddl_domain_desc
+        )
+        lines = raw_pddl_state.split('\n')
+
+        # These two are used for grounding.
+        full_descriptions = []
+        label_descriptions = []
+        object_ids = []
+        self.object_data = {}
+        for v in self.init_state.objects_section:
+            #print(v)
+            #print(v.type, v.value, type(v), type(v.type))
+            pddl_line = lines[v.type.location.line-1]
+            if ';' in pddl_line:
+                comment = pddl_line.split(';', 1)[1]
+                appearance, location = [x.strip() for x in comment.split('|')]
+            else:
+                appearance, location = (None, None)
+            object_type, object_id = v.type.value, v.value.value
+            obj = SceneObject(
+                object_type=object_type,
+                object_id=object_id,
+                appearance=appearance,
+                #location=location,
+            )
+            self.object_data[object_id] = obj
+
+            if object_type != "robot":
+                full_descriptions.append(f"a {appearance} {location}")
+                label_descriptions.append(f"a {appearance}")
+                object_ids.append(object_id)
+
+        if ground and self.grounder is not None:
+            video_data = [Image.fromarray(image_rgb)]
+            # Much faster and seems more accurate than gemini.
+            mask_results = self.grounder.predict_masks_video(video_data, full_descriptions, label_descriptions, use_clip=True)
+            for object_id, result in zip(object_ids, mask_results):
+                self.object_data[object_id].grounding = result
 
 
-@dataclass
-class SceneEdge:
-    """
-    An edge in the scene graph encoding a spatial or functional relationship.
+    def get_available_actions(self):
+        """
+        Get actions that are available from PDDL.
 
-    Relations:
-        on      -- source rests on top of target
-        in      -- source is inside target
-        next_to -- source is adjacent to target
-        near    -- source is in the vicinity of target
-        part_of -- source is a structural part of target (e.g., drawer part_of cabinet)
-        holding -- agent is holding the object (source=agent, target=object)
-    """
-    source: str
-    target: str
-    relation: str
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "SceneEdge":
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
-
-
-class SceneGraph:
-    """
-    A scene graph representing the symbolic state of a robotic manipulation
-    workspace. Supports querying, modification, and deep copying for
-    state-transition verification.
-    """
-
-    def __init__(
-        self,
-        nodes: Optional[dict] = None,
-        edges: Optional[list] = None,
-    ):
-        self.nodes: dict[str, SceneNode] = nodes or {}
-        self.edges: list[SceneEdge] = edges or []
-
-    # ── Node operations ─────────────────────────────────────────────────
-
-    def add_node(self, node: SceneNode):
-        self.nodes[node.id] = node
-
-    def remove_node(self, node_id: str):
-        if node_id in self.nodes:
-            del self.nodes[node_id]
-            self.edges = [
-                e for e in self.edges
-                if e.source != node_id and e.target != node_id
-            ]
-
-    def get_node(self, node_id: str) -> Optional[SceneNode]:
-        return self.nodes.get(node_id)
-
-    def has_node(self, node_id: str) -> bool:
-        return node_id in self.nodes
-
-    # ── Edge operations ─────────────────────────────────────────────────
-
-    def add_edge(self, edge: SceneEdge):
-        self.edges.append(edge)
-
-    def remove_edges(
-        self,
-        source: Optional[str] = None,
-        target: Optional[str] = None,
-        relation: Optional[str] = None,
-    ):
-        """Remove all edges matching the given filter(s)."""
-        def matches(e: SceneEdge) -> bool:
-            if source is not None and e.source != source:
-                return False
-            if target is not None and e.target != target:
-                return False
-            if relation is not None and e.relation != relation:
-                return False
-            return True
-        self.edges = [e for e in self.edges if not matches(e)]
-
-    def find_edges(
-        self,
-        source: Optional[str] = None,
-        target: Optional[str] = None,
-        relation: Optional[str] = None,
-    ) -> list[SceneEdge]:
-        """Find all edges matching the given filter(s)."""
-        results = []
-        for e in self.edges:
-            if source is not None and e.source != source:
-                continue
-            if target is not None and e.target != target:
-                continue
-            if relation is not None and e.relation != relation:
-                continue
-            results.append(e)
-        return results
-
-    # ── Query helpers ───────────────────────────────────────────────────
-
-    def find_nodes_by_type(self, node_type: str) -> list[SceneNode]:
-        return [n for n in self.nodes.values() if n.node_type == node_type]
-
-    def find_nodes_by_name(self, name: str) -> list[SceneNode]:
-        """Find nodes whose name contains the search string (case-insensitive)."""
-        name_lower = name.lower()
-        return [n for n in self.nodes.values() if name_lower in n.name.lower()]
-
-    def find_nodes_by_attribute(self, key: str, value: str) -> list[SceneNode]:
+        Maybe there will be actions that cannot be described in pddl... how will that be handled?
+        Need to manually set predicates. But this can break the simulator.
+        """
         return [
-            n for n in self.nodes.values()
-            if str(n.attributes.get(key, "")).lower() == value.lower()
+            {
+                'name': x.name.value,
+                'parameters': [g.value for g in x.grounding]
+            }
+            for x in self.simulator.get_grounded_actions()
         ]
 
-    def get_agent_node(self) -> Optional[SceneNode]:
-        agents = self.find_nodes_by_type("agent")
-        return agents[0] if agents else None
-
-    def get_held_objects(self) -> list[tuple[SceneNode, SceneEdge]]:
-        """Return (node, holding_edge) for all objects the agent is holding."""
-        agent = self.get_agent_node()
-        if not agent:
-            return []
-        holding_edges = self.find_edges(source=agent.id, relation="holding")
-        results = []
-        for edge in holding_edges:
-            node = self.get_node(edge.target)
-            if node:
-                results.append((node, edge))
-        return results
-
-    def is_gripper_empty(self) -> bool:
-        return len(self.get_held_objects()) == 0
-
-    # ── Copy & serialization ────────────────────────────────────────────
-
-    def deep_copy(self) -> "SceneGraph":
-        """Create a deep copy for state-transition simulation."""
-        new_nodes = {}
-        for nid, n in self.nodes.items():
-            new_nodes[nid] = SceneNode(
-                id=n.id,
-                name=n.name,
-                node_type=n.node_type,
-                attributes=copy.deepcopy(n.attributes),
-                state=copy.deepcopy(n.state),
-                affordances=list(n.affordances),
-                location_description=n.location_description,
-            )
-        new_edges = [SceneEdge(e.source, e.target, e.relation) for e in self.edges]
-        return SceneGraph(new_nodes, new_edges)
-
-    def to_dict(self) -> dict:
+    def to_dict(self, include_grounding=False):
+        """Machine readable summary of scene graph objects"""
+        all_predicates = list(self.simulator.state)
+        edges = []
+        attrs = {obj_id: [] for obj_id in self.object_data.keys()}
+        for pred in all_predicates:
+            name = pred.name.value
+            targets = [x.value for x in pred.assignment]
+            if len(targets) == 1:   # Assume attribute
+                attrs[targets[0]].append(name)
+            elif len(targets) == 2: # Assume directed edge
+                edges.append((name, *targets))
+        node_data = []
+        for obj in self.object_data.values():
+            data = obj.to_dict()
+            data['attributes'] = attrs[obj.object_id]
+            node_data.append(data)
         return {
-            "nodes": [n.to_dict() for n in self.nodes.values()],
-            "edges": [e.to_dict() for e in self.edges],
+            'nodes': node_data,
+            'edges': [
+                {
+                    'from': x,
+                    'to': y,
+                    'relation': r
+                }
+                for r, x, y in edges
+            ]
         }
-
-    def to_json(self, indent: int = 2) -> str:
-        return json.dumps(self.to_dict(), indent=indent)
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "SceneGraph":
-        nodes = {}
-        for nd in d.get("nodes", []):
-            node = SceneNode.from_dict(nd)
-            nodes[node.id] = node
-        edges = [SceneEdge.from_dict(ed) for ed in d.get("edges", [])]
-        return cls(nodes, edges)
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "SceneGraph":
-        return cls.from_dict(json.loads(json_str))
-
-    # ── Pretty printing ─────────────────────────────────────────────────
 
     def summary(self) -> str:
         """Human-readable summary of the scene graph state."""
+        info = self.to_dict()
+
         lines = ["=== Scene Graph State ==="]
-        lines.append(f"Nodes ({len(self.nodes)}):")
-        for n in self.nodes.values():
-            state_str = (
-                ", ".join(f"{k}={v}" for k, v in n.state.items())
-                if n.state else "none"
-            )
+        lines.append(f"Nodes ({len(info['nodes'])}):")
+        for data in info['nodes']:
             attr_str = (
-                ", ".join(f"{k}={v}" for k, v in n.attributes.items())
-                if n.attributes else "none"
+                ", ".join(data['attributes'])
             )
             lines.append(
-                f"  [{n.node_type:7s}] {n.id}: \"{n.name}\" "
-                f"| attrs: {attr_str} | state: {state_str} "
-                f"| affordances: {n.affordances}"
+                f"  [{data['type']:14s}] {data['id']}: \n"
+                f"| description: '{data['appearance']}'\n"
+                f"| attrs: {attr_str}"
             )
-        lines.append(f"\nEdges ({len(self.edges)}):")
-        for e in self.edges:
-            lines.append(f"  {e.source} --[{e.relation}]--> {e.target}")
-        return "\n".join(lines)
+
+        lines.append(f"\nEdges ({len(info['edges'])})")
+        for e in info['edges']:
+            lines.append(f"  {e['from']} --[{e['relation']}]--> {e['to']}")
+        return '\n'.join(lines)
