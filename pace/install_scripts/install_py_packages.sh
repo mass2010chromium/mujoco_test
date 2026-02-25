@@ -55,6 +55,9 @@ bash install_pi0.sh
 ### notebook install
 bash install_notebook.sh
 
+### SAM3, pddlsim install
+bash install_grounding.sh
+
 
 ### robosuite
 # TODO: move to uv

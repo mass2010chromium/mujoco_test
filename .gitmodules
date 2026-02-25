@@ -10,10 +10,15 @@
 	path = lerobot-libero
 	url = https://github.com/huggingface/lerobot-libero.git
     ignore = dirty
-[submodule "sam3"]
-	path = sam3
+[submodule "thirdparty/sam3"]
+	path = thirdparty/sam3
 	url = https://github.com/facebookresearch/sam3.git
     ignore = dirty
 [submodule "pace/openpi"]
 	path = pace/openpi
 	url = https://github.com/IvanIZ/openpi.git
+    ignore = dirty
+[submodule "thirdparty/sam3_weights"]
+	path = thirdparty/sam3_weights
+	url = https://huggingface.co/1038lab/sam3.git
+    ignore = dirty
