@@ -1,0 +1,982 @@
+diff --git a/src/openpi/models/gemma.py b/src/openpi/models/gemma.py
+index d1623d1..2548f7a 100644
+--- a/src/openpi/models/gemma.py
++++ b/src/openpi/models/gemma.py
+@@ -153,13 +153,33 @@ class Embedder(nn.Module):
+     def decode(self, x):
+         return jnp.dot(x, self.input_embedding_table.T)
+ 
+-
+ @at.typecheck
+ class Attention(nn.Module):
+     """Attention module."""
+ 
+     configs: Sequence[Config]
+ 
++    def _init_cache(self, k, v, cache_size):
++        """Initialize KV cache"""
++        prefill_len = k.shape[1]
++        pad_width = ((0, 0), (0, cache_size - prefill_len), (0, 0), (0, 0))
++        cache_dtype =k.dtype  # self.cache_dtype or k.dtype
++        k_cache = jnp.pad(k.astype(cache_dtype), pad_width)
++        v_cache = jnp.pad(v.astype(cache_dtype), pad_width)
++        idx = jnp.zeros((k.shape[0],), dtype=jnp.int32) + prefill_len
++        return idx, k_cache, v_cache
++
++    def _update_cache(self, k, v, idx, k_cache, v_cache):
++        """Update KV cache with new values"""
++        assert k.shape[1] == 1, "Only support kv-cache updates of length 1"
++        indices = (0, idx[0], 0, 0)
++        cache_dtype = k.dtype  # self.cache_dtype or k.dtype
++        # jax.debug.breakpoint()
++        k_new = jax.lax.dynamic_update_slice(k_cache, k.astype(cache_dtype), indices)
++        v_new = jax.lax.dynamic_update_slice(v_cache, v.astype(cache_dtype), indices)
++        idx_new = idx + 1
++        return idx_new, k_new, v_new
++
+     @nn.compact
+     def __call__(self, xs, positions, attn_mask, kv_cache):
+         # all experts must share the same head dim, num heads, and num kv heads for self-attention to work
+@@ -208,10 +228,19 @@ class Attention(nn.Module):
+         # should still be half-precision here (if input was half-precision)
+         assert q.dtype == k.dtype == v.dtype == dtype
+ 
+-        if kv_cache is not None:
+-            cache_k, cache_v = kv_cache
+-            k = jnp.concatenate([cache_k, k], axis=1)
+-            v = jnp.concatenate([cache_v, v], axis=1)
++        if kv_cache is None:
++            idx, k_cache, v_cache = self._init_cache(k, v, attn_mask.shape[-1])
++            k, v = k_cache, v_cache
++        else:
++            idx, k_cache, v_cache = kv_cache
++            if k.shape[1] == 1: # Next token prediction, k,v length = 1
++                idx, k_cache, v_cache = self._update_cache(k, v, idx, k_cache, v_cache)
++                k, v = k_cache, v_cache
++            else: # Sample action, k,v length = action horizon; We don't update kv_cache here since it is no use
++                k = jnp.concatenate([k_cache, k], axis=1)
++                v = jnp.concatenate([v_cache, v], axis=1)
++
++        kv_cache = (idx, k_cache, v_cache)
+ 
+         q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=self.configs[0].num_kv_heads)
+         logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
+@@ -246,8 +275,7 @@ class Attention(nn.Module):
+             else:
+                 out.append(None)
+ 
+-        return out, (k, v)
+-
++        return out, kv_cache
+ 
+ @at.typecheck
+ class FeedForward(nn.Module):
+@@ -333,7 +361,7 @@ class Block(nn.Module):
+         return xs, kv_cache
+ 
+ 
+-KVCache: TypeAlias = tuple[at.Float[at.Array, "l b _t _k _h"], at.Float[at.Array, "l b _t _v _h"]]
++KVCache: TypeAlias = tuple[at.Int[at.Array, "l b"], at.Float[at.Array, "l b _t _k _h"], at.Float[at.Array, "l b _t _v _h"]]
+ 
+ 
+ @at.typecheck
+@@ -385,6 +413,10 @@ class Module(nn.Module):
+     def embed(self, tokens: at.Int[at.Array, "b t"]) -> at.Float[at.Array, "b t d"]:
+         return self.embedder.encode(tokens).astype(self.embed_dtype)
+ 
++    @at.typecheck
++    def deembed(self, latents: at.Float[at.Array, "b t d"]) -> at.Float[at.Array, "b t v"]:
++        return self.embedder.decode(latents)
++
+     @at.typecheck
+     def __call__(
+         self,
+diff --git a/src/openpi/models/model.py b/src/openpi/models/model.py
+index 29618b4..c78b9f6 100644
+--- a/src/openpi/models/model.py
++++ b/src/openpi/models/model.py
+@@ -33,6 +33,7 @@ class ModelType(enum.Enum):
+     PI0 = "pi0"
+     PI0_FAST = "pi0_fast"
+     PI05 = "pi05"
++    PI0_FUSE = "pi0_fuse"
+ 
+ 
+ # The model always expects these images
+@@ -136,6 +137,34 @@ class Observation(Generic[ArrayT]):
+         return result
+ 
+ 
++@at.typecheck
++@struct.dataclass
++class FuseObservation(Observation):
++    """Extended observation for models with joint text+action loss (pi0_fuse)."""
++
++    diffusion_loss_mask: at.Bool[ArrayT, "*b"] | None = None
++
++    @classmethod
++    def from_dict(cls, data: at.PyTree[ArrayT]) -> "FuseObservation[ArrayT]":
++        if ("tokenized_prompt" in data) != ("tokenized_prompt_mask" in data):
++            raise ValueError("tokenized_prompt and tokenized_prompt_mask must be provided together.")
++        for key in data["image"]:
++            if data["image"][key].dtype == np.uint8:
++                data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
++            elif hasattr(data["image"][key], "dtype") and data["image"][key].dtype == torch.uint8:
++                data["image"][key] = data["image"][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
++        return cls(
++            images=data["image"],
++            image_masks=data["image_mask"],
++            state=data["state"],
++            tokenized_prompt=data.get("tokenized_prompt"),
++            tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
++            token_ar_mask=data.get("token_ar_mask"),
++            token_loss_mask=data.get("token_loss_mask"),
++            diffusion_loss_mask=data.get("diffusion_loss_mask"),
++        )
++
++
+ # Defines the format of the actions. This field is included as "actions" inside the dictionary
+ # produced by the data transforms.
+ Actions = at.Float[ArrayT, "*b ah ad"]
+@@ -143,12 +172,12 @@ Actions = at.Float[ArrayT, "*b ah ad"]
+ 
+ def preprocess_observation(
+     rng: at.KeyArrayLike | None,
+-    observation: Observation,
++    observation: Observation | FuseObservation,
+     *,
+     train: bool = False,
+     image_keys: Sequence[str] = IMAGE_KEYS,
+     image_resolution: tuple[int, int] = IMAGE_RESOLUTION,
+-) -> Observation:
++) -> Observation | FuseObservation:
+     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
+     filling in a default image mask (if necessary).
+     """
+@@ -197,7 +226,7 @@ def preprocess_observation(
+         else:
+             out_masks[key] = jnp.asarray(observation.image_masks[key])
+ 
+-    return Observation(
++    common_kwargs = dict(
+         images=out_images,
+         image_masks=out_masks,
+         state=observation.state,
+@@ -206,6 +235,9 @@ def preprocess_observation(
+         token_ar_mask=observation.token_ar_mask,
+         token_loss_mask=observation.token_loss_mask,
+     )
++    if isinstance(observation, FuseObservation):
++        return FuseObservation(**common_kwargs, diffusion_loss_mask=observation.diffusion_loss_mask)
++    return Observation(**common_kwargs)
+ 
+ 
+ @dataclasses.dataclass(frozen=True)
+diff --git a/src/openpi/models/pi0.py b/src/openpi/models/pi0.py
+index ae7c459..8e713b7 100644
+--- a/src/openpi/models/pi0.py
++++ b/src/openpi/models/pi0.py
+@@ -1,3 +1,7 @@
++"""
++NOTE: Many changes from https://github.com/BrunoFANG1/openpi_subtask_generation/blob/main/src/openpi/models/pi05.py
++For implementing subtask inference
++"""
+ import logging
+ 
+ import einops
+@@ -43,6 +47,31 @@ def make_attn_mask(input_mask, mask_ar):
+     valid_mask = input_mask[:, None, :] * input_mask[:, :, None]
+     return jnp.logical_and(attn_mask, valid_mask)
+ 
++# Is this needed?
++@jax.vmap
++def left_to_right_align(x, input_mask, attn_mask):
++    """Converts input from left-align to right-aligned."""
++    # Due to vmap, this is operating in a single example (not batch level).
++    assert x.ndim == 2
++    assert input_mask.ndim == 1
++    assert attn_mask.ndim == 2
++    assert x.shape[0] == input_mask.shape[0]
++    assert attn_mask.shape[0] == attn_mask.shape[1], attn_mask.shape
++    seqlen = jnp.max(input_mask * jnp.arange(input_mask.shape[0])) + 1
++    x = jnp.roll(x, -seqlen, axis=0)
++    input_mask = jnp.roll(input_mask, -seqlen, axis=0)
++    attn_mask = jnp.roll(attn_mask, -seqlen, axis=(0, 1))
++    return x, input_mask, attn_mask
++
++
++def put_along_last_axis(arr, indices, values):
++    """Like np.put_along_axis(..., axis=-1), since jax is missing it."""
++    assert arr.ndim == indices.ndim == values.ndim, (arr.ndim, indices.ndim, values.ndim)
++    onehot = jax.nn.one_hot(indices, arr.shape[-1], dtype=values.dtype)
++    put_mask = jnp.einsum("...i,...in->...n", jnp.ones(values.shape, jnp.int32), onehot)
++    put_values = jnp.einsum("...i,...in->...n", values, onehot)
++    return jnp.where(put_mask, put_values, arr)
++
+ 
+ @at.typecheck
+ def posemb_sincos(
+@@ -130,7 +159,9 @@ class Pi0(_model.BaseModel):
+             tokens.append(tokenized_inputs)
+             input_mask.append(obs.tokenized_prompt_mask)
+             # full attention between image and language inputs
+-            ar_mask += [False] * tokenized_inputs.shape[1]
++            #ar_mask += [False] * tokenized_inputs.shape[1]
++            # subtask_generation repo has this set as True
++            ar_mask += [True] * tokenized_inputs.shape[1]
+         tokens = jnp.concatenate(tokens, axis=1)
+         input_mask = jnp.concatenate(input_mask, axis=1)
+         ar_mask = jnp.array(ar_mask)
+@@ -213,6 +244,111 @@ class Pi0(_model.BaseModel):
+ 
+         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+ 
++
++    def sample_low_level_task(
++        self,
++        rng: at.KeyArrayLike,
++        observation: _model.Observation,
++        max_decoding_steps: int = 20,
++        PALIGEMMA_EOS_TOKEN: int = 1,
++        temperature: float = 0.0,
++    ):
++
++        batch_size = observation.tokenized_prompt.shape[0]
++        prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
++        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
++
++        # left to right align all input token sequences
++        prefix_token_embeddings, prefix_mask, prefix_attn_mask = left_to_right_align(
++            prefix_token_embeddings, prefix_mask, prefix_attn_mask
++        )
++        prefill_size = prefix_token_embeddings.shape[1]
++        prefill_len = jnp.sum(prefix_mask, axis=-1)
++        prefix_start = prefill_size - prefill_len
++
++        prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
++        prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
++        # import pdb; pdb.set_trace()
++        (prefix_out, _), kv_cache = self.PaliGemma.llm(
++            [prefix_token_embeddings, None], mask=prefix_attn_mask, positions=prefix_positions, adarms_cond=[None, None]
++        )
++        last_token_embedding = prefix_out[:, -1:]
++        last_logits = self.PaliGemma.llm(last_token_embedding, method="deembed")
++        last_logits = jax.nn.log_softmax(last_logits, axis=-1)
++
++        rng, rng_step = jax.random.split(rng)
++        token = jax.lax.cond(
++            temperature > 0.0,
++            lambda _: jax.random.categorical(rng_step, last_logits / temperature, axis=-1),
++            lambda _: jnp.argmax(last_logits, axis=-1),
++            operand=None,
++        )
++        output_tokens = jnp.zeros((batch_size, max_decoding_steps), dtype=int)
++        #output_tokens = put_along_last_axis(output_tokens, jnp.broadcast_to(0, (batch_size, 1)), token)
++        #print(prefix_token_embeddings.shape, kv_cache[0].shape, kv_cache[1].shape, kv_cache[2].shape)
++
++        def step(carry):
++            rng, last_logit, output_tokens, cache, _, step = carry
++
++            # Sample token from last logit
++            # Split RNG for this step
++            rng, rng_step = jax.random.split(rng)
++            token = jax.lax.cond(
++                temperature > 0.0,
++                lambda _: jax.random.categorical(rng_step, last_logit / temperature, axis=-1),
++                lambda _: jnp.argmax(last_logit, axis=-1),
++                operand=None,
++            )
++            output_tokens = put_along_last_axis(output_tokens, jnp.broadcast_to(step, (batch_size, 1)), token)
++
++            # Check for early stopping --> stop if all batch elements have EOS token
++            ### TODO: erase extra decoded token due to mismatch
++            has_eos = jnp.any(token == PALIGEMMA_EOS_TOKEN, axis=-1)
++            all_eos = jnp.all(has_eos)
++
++            # Decode one step
++            token_embedding =  self.PaliGemma.llm(token, method="embed")
++            positions = prefill_len[:, None] + step
++
++			# This seems wrong. It seems to produce a "flat" attention mask instead of an autoregressive one
++			# But I guess we don't care, we only care about the last embedding being correct
++			# Does this run efficiently? Naively the implementation would take a lot more compute, but maybe its
++            #   handled by jax...
++            mask = jnp.logical_and(
++                jnp.arange(prefill_size + max_decoding_steps)[None, None, :] >= prefix_start[:, None, None],
++                jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
++                < (jnp.broadcast_to(prefill_size + step + 1, (prefix_start.shape[0], 1, 1))),
++            )
++            #print(mask.shape)
++
++            (prefix_out, _), kv_cache = self.PaliGemma.llm(
++                [token_embedding, None], mask=mask, positions=positions, adarms_cond=[None, None], kv_cache=cache
++            )
++            last_token_embedding = prefix_out[:, -1:]
++            last_logits = self.PaliGemma.llm(last_token_embedding, method="deembed")
++            last_logits = jax.nn.log_softmax(last_logits, axis=-1)
++
++            return rng, last_logits, output_tokens, kv_cache, all_eos, step + 1
++
++        def cond(carry):
++            _, _, _, _, all_eos, step = carry
++            return (~all_eos) & (step < max_decoding_steps)
++
++        #return output_tokens, kv_cache, prefix_mask, prefix_ar_mask
++
++        # Use lax.while_loop so we can jit the full decoding loop.
++        _, _, output_tokens, kv_cache, _, _ = jax.lax.while_loop(
++            cond, step, (rng, last_logits, output_tokens, kv_cache, False, 0)
++        )
++        mask = jnp.concatenate([prefix_mask, (output_tokens!=0).astype(jnp.bool_)], axis=1)
++        ar_mask = jnp.concatenate([prefix_ar_mask, jnp.ones(max_decoding_steps, dtype=jnp.bool_)], axis=0)
++        # NOTE:
++        #  output_tokens [B, max_decoding_steps]
++        #  kv_cache [B, prefix_len+max_decoding_steps, ...]
++        #  mask [B, prefix_len+max_decoding_steps]
++        #  ar_mask [prefix_len+max_decoding_steps]
++        return output_tokens, kv_cache, mask, ar_mask
++
+     @override
+     def sample_actions(
+         self,
+@@ -227,14 +363,12 @@ class Pi0(_model.BaseModel):
+         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
+         dt = -1.0 / num_steps
+         batch_size = observation.state.shape[0]
++		# TODO: Can cause issues since subtask lengths are different, leading to more tokens past EOS if batch size is not 1.
+         if noise is None:
+             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
+ 
+         # first fill KV cache with a forward pass of the prefix
+-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+-        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+-        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+-        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
++        output_tokens, kv_cache, prefix_mask, prefix_ar_mask = self.sample_low_level_task(rng, observation, max_decoding_steps=20, temperature=0.0)
+ 
+         def step(carry):
+             x_t, time = carry
+@@ -250,17 +384,19 @@ class Pi0(_model.BaseModel):
+             # `combined_mask` is shape (b, suffix_len, prefix_len + suffix_len) indicating how the suffix tokens (which
+             # generate the queries) can attend to the full prefix + suffix sequence (which generates the keys and values)
+             full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
++            query_attn_mask = full_attn_mask[:, -suffix_tokens.shape[1]:, :] # [B, suffix_len, prefix_len+suffix_len]
++
+             assert full_attn_mask.shape == (
+                 batch_size,
+                 suffix_tokens.shape[1],
+-                prefix_tokens.shape[1] + suffix_tokens.shape[1],
++                prefix_mask.shape[1] + suffix_tokens.shape[1],
+             )
+             # `positions` is shape (b, suffix_len) indicating the positions of the suffix tokens
+             positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+ 
+             (prefix_out, suffix_out), _ = self.PaliGemma.llm(
+                 [None, suffix_tokens],
+-                mask=full_attn_mask,
++                mask=query_attn_mask,
+                 positions=positions,
+                 kv_cache=kv_cache,
+                 adarms_cond=[None, adarms_cond],
+@@ -276,4 +412,4 @@ class Pi0(_model.BaseModel):
+             return time >= -dt / 2
+ 
+         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
+-        return x_0
++        return (x_0, output_tokens)
+diff --git a/src/openpi/models/tokenizer.py b/src/openpi/models/tokenizer.py
+index 8a4966d..981132f 100644
+--- a/src/openpi/models/tokenizer.py
++++ b/src/openpi/models/tokenizer.py
+@@ -25,7 +25,8 @@ class PaligemmaTokenizer:
+             # This is the Pi05 format, where the state is part of the discrete language input.
+             discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
+             state_str = " ".join(map(str, discretized_state))
+-            full_prompt = f"Task: {cleaned_text}, State: {state_str};\nAction: "
++            #full_prompt = f"Task: {cleaned_text}, State: {state_str}; \nAction: "
++            full_prompt = f"Task: {cleaned_text}. Subtask: "
+             tokens = self._tokenizer.encode(full_prompt, add_bos=True)
+         else:
+             # This is the Pi0 format, where the state is part of the continuous action expert input.
+@@ -48,6 +49,103 @@ class PaligemmaTokenizer:
+         return np.asarray(tokens), np.asarray(mask)
+ 
+ 
++END_OF_PREFIX_TOKEN = 257022
++BEGIN_OF_ACTION = 257021
++BEGIN_OF_REASONING = 257020
++PALIGEMMA_EOS_TOKEN = 1
++
++
++class FusePaligemmaTokenizer:
++    """Tokenizer for models with joint text reasoning and action generation.
++
++    Handles the special token protocol:
++    - Text prefix (instruction + reasoning context) uses bidirectional attention
++    - Text suffix (reasoning output) uses causal attention
++    - Special tokens mark transitions between prefix, reasoning, and action modes
++    """
++
++    def __init__(self, max_len: int = 415):
++        self._max_len = max_len
++
++        path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
++        with path.open("rb") as f:
++            self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
++
++    def tokenize(
++        self,
++        thought: list[str],
++        act_with_outdated_thought: bool,
++        think_with_outdated_thought: bool,
++        state: np.ndarray | None = None,
++    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
++        prefix = thought[0]
++        if state is not None:
++            discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
++            state_str = " ".join(map(str, discretized_state))
++            prefix = f"{prefix}; State: {state_str}"
++
++        prefix_tokens = (
++            self._tokenizer.encode(prefix, add_bos=True) +
++            [END_OF_PREFIX_TOKEN]
++        )
++
++        if len(thought) > 1:
++            suffix = thought[1]
++            suffix_tokens = [BEGIN_OF_REASONING] + self._tokenizer.encode(suffix, add_eos=True)
++            diffusion_loss_mask = np.False_
++        else:
++            suffix_tokens = [BEGIN_OF_ACTION]
++            diffusion_loss_mask = np.True_
++
++        tokens = prefix_tokens + suffix_tokens
++        token_mask = [True] * len(tokens)
++        ar_mask = [0] * len(prefix_tokens) + [1] * len(suffix_tokens)
++
++        if think_with_outdated_thought:
++            text_loss_mask = [False] * len(prefix_tokens) + [True] + [False] * (len(suffix_tokens) - 1)
++        else:
++            text_loss_mask = (
++                [False] * len(prefix_tokens) +
++                [not act_with_outdated_thought] +
++                [True] * (len(suffix_tokens) - 1)
++            )
++
++        tokens_len = len(tokens)
++        if tokens_len < self._max_len:
++            padding = [False] * (self._max_len - tokens_len)
++            tokens = tokens + padding
++            token_mask = token_mask + padding
++            ar_mask = ar_mask + padding
++            text_loss_mask = text_loss_mask + padding
++        else:
++            if len(tokens) > self._max_len:
++                logging.warning(
++                    f"Token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
++                    "Consider increasing the `max_token_len` in your model config if this happens frequently."
++                )
++            tokens = tokens[: self._max_len]
++            token_mask = token_mask[: self._max_len]
++            ar_mask = ar_mask[: self._max_len]
++            text_loss_mask = text_loss_mask[: self._max_len]
++
++        return (
++            np.asarray(tokens),
++            np.asarray(token_mask),
++            np.asarray(ar_mask),
++            np.asarray(text_loss_mask),
++            diffusion_loss_mask,
++        )
++
++    def extract_thoughts(self, tokens: np.ndarray) -> str:
++        tokens = tokens.tolist()
++        filtered_tokens = []
++        for t in tokens[1:]:
++            filtered_tokens.append(t)
++            if t == PALIGEMMA_EOS_TOKEN:
++                break
++        return self._tokenizer.decode(filtered_tokens)
++
++
+ class FASTTokenizer:
+     def __init__(self, max_len: int = 256, fast_tokenizer_path: str = "physical-intelligence/fast"):
+         self._max_len = max_len
+diff --git a/src/openpi/policies/droid_policy.py b/src/openpi/policies/droid_policy.py
+index 666b7f7..0d510e3 100644
+--- a/src/openpi/policies/droid_policy.py
++++ b/src/openpi/policies/droid_policy.py
+@@ -78,4 +78,4 @@ class DroidInputs(transforms.DataTransformFn):
+ class DroidOutputs(transforms.DataTransformFn):
+     def __call__(self, data: dict) -> dict:
+         # Only return the first 8 dims.
+-        return {"actions": np.asarray(data["actions"][:, :8])}
++        return {"actions": np.asarray(data["actions"][:, :8]), "subtask": data["subtask"]}
+diff --git a/src/openpi/policies/libero_policy.py b/src/openpi/policies/libero_policy.py
+index 10611f6..3858f39 100644
+--- a/src/openpi/policies/libero_policy.py
++++ b/src/openpi/policies/libero_policy.py
+@@ -83,6 +83,47 @@ class LiberoInputs(transforms.DataTransformFn):
+         return inputs
+ 
+ 
++@dataclasses.dataclass(frozen=True)
++class LiberoReasonInputs(transforms.DataTransformFn):
++    """Converts inputs for Pi0Fuse reasoning model. Handles thought field."""
++
++    model_type: _model.ModelType = _model.ModelType.PI0_FUSE
++
++    def __call__(self, data: dict) -> dict:
++        base_image = _parse_image(data.get("image_1", data.get("observation/image")))
++        wrist_image_key = "image_wrist_1" if "image_wrist_1" in data else "observation/wrist_image"
++        if wrist_image_key in data:
++            wrist_image = _parse_image(data[wrist_image_key])
++        else:
++            wrist_image = np.zeros_like(base_image)
++
++        inputs = {
++            "state": data["state"],
++            "image": {
++                "base_0_rgb": base_image,
++                "left_wrist_0_rgb": wrist_image,
++                "right_wrist_0_rgb": np.zeros_like(base_image),
++            },
++            "image_mask": {
++                "base_0_rgb": np.True_,
++                "left_wrist_0_rgb": np.True_,
++                "right_wrist_0_rgb": np.False_,
++            },
++        }
++
++        if "actions" in data:
++            inputs["actions"] = data["actions"]
++
++        if "thought" in data:
++            inputs["thought"] = data["thought"]
++            inputs["act_with_outdated_thought"] = data.get("act_with_outdated_thought", False)
++            inputs["think_with_outdated_thought"] = data.get("think_with_outdated_thought", False)
++        elif "prompt" in data:
++            inputs["prompt"] = data["prompt"]
++
++        return inputs
++
++
+ @dataclasses.dataclass(frozen=True)
+ class LiberoOutputs(transforms.DataTransformFn):
+     """
+@@ -97,4 +138,4 @@ class LiberoOutputs(transforms.DataTransformFn):
+         # dimension, we need to now parse out the correct number of actions in the return dict.
+         # For Libero, we only return the first 7 actions (since the rest is padding).
+         # For your own dataset, replace `7` with the action dimension of your dataset.
+-        return {"actions": np.asarray(data["actions"][:, :7])}
++        return {"actions": np.asarray(data["actions"][:, :7]), "subtask": data["subtask"]}
+diff --git a/src/openpi/policies/policy.py b/src/openpi/policies/policy.py
+index b9b708b..a1554db 100644
+--- a/src/openpi/policies/policy.py
++++ b/src/openpi/policies/policy.py
+@@ -15,6 +15,7 @@ from typing_extensions import override
+ 
+ from openpi import transforms as _transforms
+ from openpi.models import model as _model
++from openpi.models import tokenizer as _tokenizer
+ from openpi.shared import array_typing as at
+ from openpi.shared import nnx_utils
+ 
+@@ -55,6 +56,9 @@ class Policy(BasePolicy):
+         self._is_pytorch_model = is_pytorch
+         self._pytorch_device = pytorch_device
+ 
++        self._tokenizer = _tokenizer.PaligemmaTokenizer(max_len=50)
++        self._is_fuse_model = False
++
+         if self._is_pytorch_model:
+             self._model = self._model.to(pytorch_device)
+             self._model.eval()
+@@ -63,6 +67,11 @@ class Policy(BasePolicy):
+             # JAX model setup
+             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+             self._rng = rng or jax.random.key(0)
++            if hasattr(model, 'prefill'):
++                self._is_fuse_model = True
++                self._prefill = nnx_utils.module_jit(model.prefill)
++                self._reason = nnx_utils.module_jit(model.reason)
++
+ 
+     @override
+     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+@@ -87,18 +96,47 @@ class Policy(BasePolicy):
+                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
+             sample_kwargs["noise"] = noise
+ 
+-        observation = _model.Observation.from_dict(inputs)
++        if "diffusion_loss_mask" in inputs:
++            observation = _model.FuseObservation.from_dict(inputs)
++        else:
++            observation = _model.Observation.from_dict(inputs)
++
++        subtask = None
++
++        if self._is_fuse_model:
++            prefill_rng, reason_rng, action_rng = jax.random.split(sample_rng_or_pytorch_device, 3)
++            _, kv_cache, _, eop_logit, prefix_mask, prefix_positions, has_boa = \
++                self._prefill(prefill_rng, observation)
++            reasoning_tokens = self._reason(
++                reason_rng, eop_logit, kv_cache, prefix_mask, prefix_positions
++            )
++            raw = np.asarray(reasoning_tokens[0]).tolist()
++            filtered = []
++            for t in raw[1:]:
++                filtered.append(t)
++                if t == 1:
++                    break
++            subtask = self._tokenizer._tokenizer.decode(filtered)
++            all_actions = self._sample_actions(action_rng, observation, **sample_kwargs)
++        else:
++            all_actions = self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs)
++
++        if isinstance(all_actions, tuple):
++            actions, second = all_actions
++            outputs = {"state": inputs["state"], "actions": actions}
++            if subtask is None and not isinstance(second, dict):
++                subtask = self._tokenizer._tokenizer.decode(second[second != 0].tolist())
++        else:
++            outputs = {"state": inputs["state"], "actions": all_actions}
++
+         start_time = time.monotonic()
+-        outputs = {
+-            "state": inputs["state"],
+-            "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
+-        }
+         model_time = time.monotonic() - start_time
+         if self._is_pytorch_model:
+             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
+         else:
+             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+ 
++        outputs['subtask'] = subtask
+         outputs = self._output_transform(outputs)
+         outputs["policy_timing"] = {
+             "infer_ms": model_time * 1000,
+diff --git a/src/openpi/policies/policy_config.py b/src/openpi/policies/policy_config.py
+index 6570df0..3294d22 100644
+--- a/src/openpi/policies/policy_config.py
++++ b/src/openpi/policies/policy_config.py
+@@ -61,6 +61,7 @@ def create_trained_policy(
+         # that the policy is using the same normalization stats as the original training process.
+         if data_config.asset_id is None:
+             raise ValueError("Asset id is required to load norm stats.")
++        # checkpoint_dir = download.maybe_download("gs://openpi-assets/checkpoints/pi05_libero")      # hardcoded assets path for norm stats NOTE only for running base weights on libero
+         norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
+ 
+     # Determine the device to use for PyTorch models
+diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
+index 4ca47e1..b6ed193 100644
+--- a/src/openpi/training/config.py
++++ b/src/openpi/training/config.py
+@@ -13,9 +13,12 @@ import flax.nnx as nnx
+ from typing_extensions import override
+ import tyro
+ 
++import os
++
+ import openpi.models.model as _model
+ import openpi.models.pi0_config as pi0_config
+ import openpi.models.pi0_fast as pi0_fast
++import openpi.models.pi0_fuse as pi0_fuse
+ import openpi.models.tokenizer as _tokenizer
+ import openpi.policies.aloha_policy as aloha_policy
+ import openpi.policies.droid_policy as droid_policy
+@@ -136,6 +139,17 @@ class ModelTransformFactory(GroupFactory):
+                         _transforms.PadStatesAndActions(model_config.action_dim),
+                     ],
+                 )
++            case _model.ModelType.PI0_FUSE:
++                return _transforms.Group(
++                    inputs=[
++                        _transforms.ResizeImages(224, 224),
++                        _transforms.FuseTokenizePrompt(
++                            _tokenizer.FusePaligemmaTokenizer(model_config.max_token_len),
++                            discrete_state_input=True,
++                        ),
++                        _transforms.PadStatesAndActions(model_config.action_dim),
++                    ],
++                )
+             case _model.ModelType.PI0_FAST:
+                 tokenizer_cls = (
+                     _tokenizer.FASTTokenizer
+@@ -355,6 +369,63 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
+         )
+ 
+ 
++@dataclasses.dataclass(frozen=True)
++class LiberoReasonDataConfig(DataConfig):
++    """Extended data config for LIBERO with reasoning annotations."""
++    local_files_only: bool = True
++    state_down_sample_steps: list[int] = dataclasses.field(default_factory=list)
++    image_down_sample_steps: list[int] = dataclasses.field(default_factory=list)
++    action_down_sample_steps: int = 1
++    getitem_type: str = "necessary"
++    use_reasoning: bool = True
++    use_wrist_image: bool = True
++    use_history: bool = False
++    use_reference_image: bool = False
++    use_outdated_reasoning: bool = True
++    is_computing_norm_stats: bool = False
++    reasoning_json_path: str | None = None
++    use_val_dataset: bool = True
++    val_ratio: float = 0.1
++    create_train_val_split: bool = False
++    seed: int = 42
++    norm_stats_dir: str = ""
++
++
++@dataclasses.dataclass(frozen=True)
++class LeRobotLiberoReasonDataConfig(DataConfigFactory):
++    """Data config factory for LIBERO with reasoning annotations (for Pi0Fuse)."""
++
++    base_config: tyro.conf.Suppress[LiberoReasonDataConfig | DataConfig | None] = None
++
++    @override
++    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
++        data_transforms = _transforms.Group(
++            inputs=[libero_policy.LiberoReasonInputs(model_type=model_config.model_type)],
++            outputs=[libero_policy.LiberoOutputs()],
++        )
++
++        model_transforms = _transforms.Group(
++            inputs=[
++                _transforms.ResizeImages(224, 224),
++                _transforms.FuseTokenizePrompt(
++                    _tokenizer.FusePaligemmaTokenizer(model_config.max_token_len),
++                    discrete_state_input=True,
++                ),
++                _transforms.PadStatesAndActions(model_config.action_dim),
++            ],
++        )
++
++        base = self.create_base_config(assets_dirs, model_config)
++        if base.norm_stats is None:
++            base = dataclasses.replace(base, norm_stats={})
++        return dataclasses.replace(
++            base,
++            repack_transforms=_transforms.Group(),
++            data_transforms=data_transforms,
++            model_transforms=model_transforms,
++        )
++
++
+ @dataclasses.dataclass(frozen=True)
+ class RLDSDroidDataConfig(DataConfigFactory):
+     """
+@@ -628,7 +699,7 @@ _CONFIGS = [
+     ),
+     TrainConfig(
+         name="pi05_droid",
+-        model=pi0_config.Pi0Config(action_horizon=15, pi05=True),
++        model=pi0_config.Pi0Config(pi05=True, action_horizon=15, discrete_state_input=True),
+         data=SimpleDataConfig(
+             assets=AssetsConfig(asset_id="droid"),
+             data_transforms=lambda model: _transforms.Group(
+@@ -742,7 +813,7 @@ _CONFIGS = [
+     ),
+     TrainConfig(
+         name="pi05_libero",
+-        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
++        model=pi0_config.Pi0Config(pi05=True, action_horizon=15, discrete_state_input=True),
+         data=LeRobotLiberoDataConfig(
+             repo_id="physical-intelligence/libero",
+             base_config=DataConfig(prompt_from_task=True),
+@@ -968,6 +1039,106 @@ _CONFIGS = [
+     # RoboArena & PolaRiS configs.
+     *roboarena_config.get_roboarena_configs(),
+     *polaris_config.get_polaris_configs(),
++    #
++    # Pi05 Fuse (LoRA) fine-tuning with reasoning (Do What You Say).
++    #
++    # Pi05 LoRA finetuning with reasoning (Do What You Say) - LIBERO-100
++    # Uses the reasoning-annotated LIBERO dataset from "Do What You Say" paper.
++    # Before running, ensure:
++    #   1. Download dataset: set repo_id to your LeRobot LIBERO repo (e.g., "yilin-wu/libero-100")
++    #   2. Download cot_simple.json from nvidia/libero-r-datasets/libero-100-r/cot_simple.json
++    #   3. Set reasoning_json_path to "<dir>/<repo_id>/cot_simple.json"
++    TrainConfig(
++        name="pi05_libero_reason_lora",
++        model=pi0_fuse.Pi0FuseConfig(
++            pi05=True,
++            paligemma_variant="gemma_2b_lora",
++            action_expert_variant="gemma_300m_lora",
++            action_dim=32,
++            action_horizon=16,
++            max_token_len=415,
++            diffusion_loss_coeff=1.0,
++        ),
++        data=LeRobotLiberoReasonDataConfig(
++            repo_id="yilin-wu/libero-100",
++            base_config=LiberoReasonDataConfig(
++                local_files_only=True,
++                prompt_from_task=False,
++                use_reasoning=True,
++                use_wrist_image=True,
++                use_history=False,
++                use_outdated_reasoning=True,
++                action_down_sample_steps=1,
++                reasoning_json_path='~/.cache/lerobot/yilin-wu/libero-100/cot_simple.json',
++                use_val_dataset=False,
++                is_computing_norm_stats=False,
++            ),
++        ),
++        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
++        freeze_filter=pi0_fuse.Pi0FuseConfig(
++            pi05=True,
++            paligemma_variant="gemma_2b_lora",
++            action_expert_variant="gemma_300m_lora",
++        ).get_freeze_filter(),
++        ema_decay=None,
++        num_train_steps=31_800,     # 10_600 steps with 64 bs = 1 full pass
++        batch_size=64,
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=1_000,
++            peak_lr=5e-5,
++            decay_steps=1_000_000,
++            decay_lr=5e-6,
++        ),
++        wandb_enabled=False,
++        save_interval=5000,
++        keep_period=10_000,
++    ),
++    # Pi05 LoRA finetuning with reasoning - LIBERO-10 (smaller, for testing)
++    TrainConfig(
++        name="pi05_libero_10_reason_lora",
++        model=pi0_fuse.Pi0FuseConfig(
++            pi05=True,
++            paligemma_variant="gemma_2b_lora",
++            action_expert_variant="gemma_300m_lora",
++            action_dim=32,
++            action_horizon=16,
++            max_token_len=415,
++            diffusion_loss_coeff=1.0,
++        ),
++        data=LeRobotLiberoReasonDataConfig(
++            repo_id="yilin-wu/libero-10",
++            base_config=LiberoReasonDataConfig(
++                local_files_only=True,
++                prompt_from_task=False,
++                use_reasoning=True,
++                use_wrist_image=True,
++                use_history=False,
++                use_outdated_reasoning=True,
++                action_down_sample_steps=1,
++                reasoning_json_path='~/.cache/lerobot/yilin-wu/libero-10/cot_simple.json',
++                use_val_dataset=False,
++                is_computing_norm_stats=False,
++            ),
++        ),
++        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
++        freeze_filter=pi0_fuse.Pi0FuseConfig(
++            pi05=True,
++            paligemma_variant="gemma_2b_lora",
++            action_expert_variant="gemma_300m_lora",
++        ).get_freeze_filter(),
++        ema_decay=None,
++        num_train_steps=10_000,
++        batch_size=4,
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=300,
++            peak_lr=5e-5,
++            decay_steps=10_000,
++            decay_lr=5e-6,
++        ),
++        wandb_enabled=False,
++        save_interval=1000,
++        keep_period=5000,
++    ),
+ ]
+ 
+ if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
+diff --git a/src/openpi/training/data_loader.py b/src/openpi/training/data_loader.py
+index e2ee7dd..163e698 100644
+--- a/src/openpi/training/data_loader.py
++++ b/src/openpi/training/data_loader.py
+@@ -137,6 +137,10 @@ def create_torch_dataset(
+     if repo_id == "fake":
+         return FakeDataset(model_config, num_samples=1024)
+ 
++    if isinstance(data_config, _config.LiberoReasonDataConfig):
++        from openpi.policies.libero_reason_dataset import LiberoReasonDataset
++        return LiberoReasonDataset(data_config, action_horizon)
++
+     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+     dataset = lerobot_dataset.LeRobotDataset(
+         data_config.repo_id,
+@@ -531,10 +535,14 @@ class DataLoaderImpl(DataLoader):
+     def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader | RLDSDataLoader):
+         self._data_config = data_config
+         self._data_loader = data_loader
++        self._use_fuse_observation = isinstance(data_config, _config.LiberoReasonDataConfig)
+ 
+     def data_config(self) -> _config.DataConfig:
+         return self._data_config
+ 
+     def __iter__(self):
+         for batch in self._data_loader:
+-            yield _model.Observation.from_dict(batch), batch["actions"]
++            if self._use_fuse_observation or "diffusion_loss_mask" in batch:
++                yield _model.FuseObservation.from_dict(batch), batch["actions"]
++            else:
++                yield _model.Observation.from_dict(batch), batch["actions"]
+diff --git a/src/openpi/transforms.py b/src/openpi/transforms.py
+index 272375e..a655c65 100644
+--- a/src/openpi/transforms.py
++++ b/src/openpi/transforms.py
+@@ -266,6 +266,51 @@ class TokenizePrompt(DataTransformFn):
+         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
+ 
+ 
++@dataclasses.dataclass(frozen=True)
++class FuseTokenizePrompt(DataTransformFn):
++    """Tokenizes thought (prefix + suffix) for Pi0Fuse reasoning models."""
++    tokenizer: _tokenizer.FusePaligemmaTokenizer
++    discrete_state_input: bool = False
++
++    def __call__(self, data: DataDict) -> DataDict:
++        _ = data.pop("prompt", None)
++        thought = data.pop("thought", None)
++
++        if thought is None:
++            raise ValueError("Thought is required for FuseTokenizePrompt")
++
++        state = None
++        if self.discrete_state_input:
++            state = data.get("state", None)
++            if state is None:
++                raise ValueError("State is required for discrete state input.")
++
++        (
++            tokens,
++            token_mask,
++            ar_mask,
++            text_loss_mask,
++            diffusion_loss_mask,
++        ) = self.tokenizer.tokenize(
++            thought,
++            data.get('act_with_outdated_thought', False),
++            data.get('think_with_outdated_thought', False),
++            state=state,
++        )
++
++        data.pop('act_with_outdated_thought', None)
++        data.pop('think_with_outdated_thought', None)
++
++        return {
++            **data,
++            "tokenized_prompt": tokens,
++            "tokenized_prompt_mask": token_mask,
++            "token_ar_mask": ar_mask,
++            "token_loss_mask": text_loss_mask,
++            "diffusion_loss_mask": diffusion_loss_mask,
++        }
++
++
+ @dataclasses.dataclass(frozen=True)
+ class TokenizeFASTInputs(DataTransformFn):
+     tokenizer: _tokenizer.FASTTokenizer
