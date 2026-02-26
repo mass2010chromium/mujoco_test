@@ -134,7 +134,8 @@ FRAME_RATE = 20
 
 if __name__ == "__main__":
     benchmark_dict = benchmark.get_benchmark_dict()
-    task_suite = benchmark_dict['libero_spatial']()
+    # task_suite = benchmark_dict['libero_spatial']()
+    task_suite = benchmark_dict['libero_90']()
     num_tasks_in_suite = task_suite.n_tasks
 
     # Point to openpi assets (where compute_norm_stats.py wrote them)
@@ -199,6 +200,10 @@ if __name__ == "__main__":
                     if subtask is not None:
                         scene_plan = subtask
                     print(f"[Step {i}] Reasoning: {subtask}")
+
+                    mediapy.write_image('trial_imgs/frame_agentview' + str(i) + '.png', np.copy(obs['agentview_image'][::-1, ::-1, :]))
+                    mediapy.write_image('trial_imgs/frame_wrist' + str(i) + '.png', np.copy(obs['robot0_eye_in_hand_image'][::-1, ::-1, :]))
+                
                     trajectory_idx = 0
             mediapy.write_image('franka_libero_f0.png', frames[0])
             mediapy.write_video('franka_libero.mp4', frames, fps=FRAME_RATE)
