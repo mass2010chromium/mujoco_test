@@ -9,9 +9,10 @@
  )
 
  (:predicates 
-  (carry ?r - robot ?x - scene_object)      ; Robot is carrying object
   (on ?x - scene_object ?y - scene_object)  ; x is on y
+  (carry ?r - robot ?x - scene_object)      ; Robot is carrying object
   (free ?r - robot)                         ; Robot has hands free.
+                                            ;   Exactly one of `free` and `carry` must be set.
   (openable ?x - scene_object)              ; Affordance of being a container that can be open or closed.
                                             ;   Represented as an attribute instead of a class, since either
                                             ;   graspable or immovable objects can be openable...

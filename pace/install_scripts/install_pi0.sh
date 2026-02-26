@@ -14,6 +14,9 @@ UV_PIP_INSTALL () {
 UV_PIP_INSTALL pytest
 UV_PIP_INSTALL -e .
 
+# https://github.com/Physical-Intelligence/openpi/issues/559
+UV_PIP_INSTALL datasets==3.6.0
+
 unset -f UV_PIP_INSTALL
 
 # Can't download paligemma tokenizer?

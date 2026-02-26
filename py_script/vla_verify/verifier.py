@@ -145,6 +145,9 @@ class VLAVerifier:
     but you should reject translations that have different hues (red vs blue) \
     or large differences in shade (white vs black).
 
+    If the natural language task has errors such as garbled text or other nonsense, \
+    you should reject the action.
+
     You should output a json object of this form:
 
     ```json

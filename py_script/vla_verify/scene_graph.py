@@ -54,7 +54,9 @@ class TaskSceneGraph:
             from .object_grounder import ObjectGrounder
             if self._grounder is None:
                 self._grounder = ObjectGrounder(*self._grounder_args)
-        except ImportError:
+        except ImportError as e:
+            import traceback
+            traceback.print_exc()
             print("WARNING: SAM 3 not installed. Grounding is disabled")
         return self._grounder
 
@@ -91,13 +93,21 @@ class TaskSceneGraph:
     <object appearance> | <object location>
 
     The robot should be called `robot_0` and have no description comment.
+    Remember not to use logical expressions in the initial state -- only use predicates.
 
     """)
 
     def construct_from_pddl(self, image_rgb, raw_pddl_state, ground=True):
-        self.init_state, self.domain, self.simulator = setup_pddl_simulation(
-            raw_pddl_state, self.pddl_domain_desc
-        )
+        try:
+            self.init_state, self.domain, self.simulator = setup_pddl_simulation(
+                raw_pddl_state, self.pddl_domain_desc
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print("PDDL Parse Error!")
+            print(raw_pddl_state)
+            return
         lines = raw_pddl_state.split('\n')
 
         # These two are used for grounding.
