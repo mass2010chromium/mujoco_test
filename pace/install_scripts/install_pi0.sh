@@ -1,15 +1,9 @@
 SCRIPT_DIR=$(cd -- "$(dirname -- "$BASH_SOURCE[0]")/" && pwd)
 
 cd "$SCRIPT_DIR/.."
-<<<<<<< Updated upstream
 #git clone --recurse-submodules https://github.com/Physical-Intelligence/openpi.git
 cd openpi
 #git apply ../openpi_subtask.diff
-=======
-# git clone --recurse-submodules https://github.com/Physical-Intelligence/openpi.git
-cd openpi
-# git apply ../openpi_subtask.diff
->>>>>>> Stashed changes
 
 source ../../mujoco_playground/.venv/bin/activate
 UV_PIP_INSTALL () {
