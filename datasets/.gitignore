@@ -1,0 +1,4 @@
+libero_targets
+outputs_and_transforms
+checkpoints
+*.npy
