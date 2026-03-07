@@ -47,6 +47,7 @@ class TaskSceneGraph:
 
         self._grounder = None
         self._grounder_args = [gpus_to_use]
+        self.raw_pddl_state = None
 
     @property
     def grounder(self):
@@ -60,13 +61,18 @@ class TaskSceneGraph:
             print("WARNING: SAM 3 not installed. Grounding is disabled")
         return self._grounder
 
-    def _read_image(self, llm_response, image_rgb, ground=True):
+    def _read_image(self, llm_response, images, hint=[], ground=True):
         """
         Read an RGB image with a VLM, output a PDDL domain file and parse that into a scene graph.
         """
+        if type(images) == list:
+            image_rgb = images[0]
+        else:
+            image_rgb = images
+            images = [image_rgb]
         t0 = time.monotonic()
         print(f"  [VLM] Querying VLM for scene graph construction...")
-        yield [ transformers_api.make_message(images=[image_rgb]) ]
+        yield [ transformers_api.make_message(texts=hint, images=[image_rgb]) ]
         t1 = time.monotonic()
         print(f"  [VLM] Time elapsed: {t1 - t0}")
 
@@ -77,7 +83,7 @@ class TaskSceneGraph:
             print("Warning: No triple backticks given")
             response = raw_response
 
-        yield self.construct_from_pddl(image_rgb, response, ground=ground)
+        yield self.construct_from_pddl(images, response, ground=ground)
     READ_IMAGE_PROMPT = textwrap.dedent("""\
     The following is a PDDL domain description for a generic pick and place task:
 
@@ -92,12 +98,14 @@ class TaskSceneGraph:
 
     <object appearance> | <object location>
 
+    As part of the location, specify if the object is in the foreground or background.
+
     The robot should be called `robot_0` and have no description comment.
     Remember not to use logical expressions in the initial state -- only use predicates.
 
     """)
 
-    def construct_from_pddl(self, image_rgb, raw_pddl_state, ground=True):
+    def construct_from_pddl(self, images, raw_pddl_state, ground=True):
         try:
             self.init_state, self.domain, self.simulator = setup_pddl_simulation(
                 raw_pddl_state, self.pddl_domain_desc
@@ -139,11 +147,38 @@ class TaskSceneGraph:
                 object_ids.append(object_id)
 
         if ground and self.grounder is not None:
-            video_data = [Image.fromarray(image_rgb)]
+            video_data = [Image.fromarray(image_rgb) for image_rgb in images]
             # Much faster and seems more accurate than gemini.
             mask_results = self.grounder.predict_masks_video(video_data, full_descriptions, label_descriptions, use_clip=True)
             for object_id, result in zip(object_ids, mask_results):
                 self.object_data[object_id].grounding = result
+
+
+    def ground_video(self, additional_points_labels=[]):
+        """
+        Spread the grounding to the entire video.
+        """
+        def mask_to_points(mask, n_sample=4):
+            indices = np.argwhere(mask)[:, ::-1]
+            sample = np.random.choice(len(indices), n_sample, replace=False)
+            return indices[sample]
+
+        point_requests = []
+        obj_order = []
+        for obj_id, obj in self.object_data.items():
+            if obj.grounding is None:
+                continue
+            points_abs = mask_to_points(obj.grounding.mask)
+            obj_order.append(obj_id)
+            point_requests.append((len(point_requests), points_abs))
+
+        for name, points in additional_points_labels:
+            obj_order.append(name)
+            point_requests.append((len(point_requests), points))
+
+        results = self.grounder.propagate_all_detections(point_requests)
+        return [{obj_order[i]: v for i, v in result.items() } for result in results]
+
 
 
     def get_available_actions(self):

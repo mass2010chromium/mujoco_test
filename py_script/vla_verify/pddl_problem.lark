@@ -64,6 +64,7 @@ EQUALS_SIGN: "="
                     | "(" OR_KEYWORD list_{condition{argument}} ")" -> or_condition
                     | "(" NOT_KEYWORD condition{argument} ")"       -> not_condition
                     | "(" EQUALS_SIGN argument argument ")"         -> equality_condition
+                    | "(" "forall" "(" VARIABLE "-" _type ")" condition{argument} ")"     -> forall_condition
                     | predicate{argument}
 
 not_predicate{argument}: "(" "not" predicate{argument} ")"

@@ -46,7 +46,7 @@ class ObjectGrounder:
         Not thread safe!
         """
         if self.active_session_id is not None:
-            _ = predictor.handle_request(request=dict(
+            _ = self.predictor.handle_request(request=dict(
                 type="close_session",
                 session_id=self.active_session_id,
             ))
@@ -72,7 +72,7 @@ class ObjectGrounder:
         self.video_data = video_data
         return response
 
-    def predict_initial_masks(self, image: Image, classes: List[str], det_threshold=0.02, new_det_threshold=0.1):
+    def predict_initial_masks(self, image: Image, classes: List[str], det_threshold=0.04, new_det_threshold=0.1):
         """
         Construct a set of initial object hypotheses based on a list of classes.
 
@@ -205,8 +205,8 @@ class ObjectGrounder:
         # The mask nodes are labelled using their mangled names -- not necessarily matching their semantic content
         tracks = list(all_tracks.values())
         if use_clip:
-            sam_weight = 0.5
-            clip_weight = 0.5
+            sam_weight = 0.65
+            clip_weight = 0.35
             with torch.no_grad():
                 # NOTE: CLIP is run for every mask individually, instead of batched.
                 # Can we increase speed if they are all batched together?
@@ -225,6 +225,7 @@ class ObjectGrounder:
                 # CRITICAL: this `float()` forces the tensor object into a constant to be saved.
                 weight = clip_weight*float(clip_scores[i][j]) + sam_weight*track['scores'][j]
                 G.add_edge(track['obj_id'], j, weight=weight)
+                #print(track['obj_id'], j, weight, clip_scores[i][j], track['scores'][j])
 
         # maxcardinality to force each requested object to have a match
         matching = nx.max_weight_matching(G, maxcardinality=True)
@@ -255,7 +256,7 @@ class ObjectGrounder:
 
         # NOTE: no way to reject matches.
         results = []
-        for obj_id, _ in enumerate(objects):
+        for obj_id in range(len(objects)):
             if obj_id not in matching:
                 results.append(None)
                 continue
@@ -284,7 +285,7 @@ class ObjectGrounder:
         return outputs_per_frame
 
 
-    def propagate_all_detections(self, detections, robot_pos=None):
+    def propagate_all_detections(self, point_requests, target_frame=0):
         # Funny: Initialize data structures...
         _ = self.predictor.handle_request(request=dict(
             type="reset_session",
@@ -296,8 +297,66 @@ class ObjectGrounder:
             frame_index=0,
             text="nothing",
         ))
+        print("Populating SAM3 cache...", end="", flush=True)
         # Can be slow, runs at 4FPS...
         # But experimentally I can skip every 5 frames and run it anyway :)
         # So maybe this can actually run at realtime or near realtime
         self.propagate_in_video()
-        # TODO: finish implementation
+        print("Done.")
+
+        img_W, img_H = self.video_data[0].size
+
+        for obj_id, points in point_requests:
+            points_tensor = torch.tensor(
+                [[x / img_W, y / img_H] for x, y in points],
+                dtype=torch.float32,
+            )
+            # Positive examples only for now.
+            points_labels_tensor = torch.tensor(np.ones(len(points)), dtype=torch.int32)
+            response = self.predictor.handle_request(
+                request=dict(
+                    type="add_prompt",
+                    session_id=self.active_session_id,
+                    frame_index=target_frame,
+                    points=points_tensor,
+                    point_labels=points_labels_tensor,
+                    obj_id=obj_id,
+                )
+            )
+            out = response["outputs"]   # And then unceremoniously discarded...
+
+        print("Propagating detections...", end="", flush=True)
+        raw_results = self.propagate_in_video()
+        print("Done.")
+        results = []
+        for i in range(len(raw_results)):
+            sam_output = raw_results[i]
+            frame_output = {}
+            for _id, box_xywh, mask, score in zip(
+                sam_output['out_obj_ids'],
+                sam_output['out_boxes_xywh'],
+                sam_output['out_binary_masks'],
+                sam_output['out_probs']
+            ):
+                p1 = box_xywh[:2]
+                p2 = box_xywh[2:] + p1
+                box_pixel = np.array([p1, p2]) * np.array([img_W, img_H])
+                crop = self.video_data[i].crop(box_pixel.flatten())
+                frame_output[_id] = GroundingResult(
+                    box=box_pixel,
+                    box_xywh=box_xywh,
+                    crop=crop,
+                    mask=mask,
+                    score=score
+                )
+            results.append(frame_output)
+        
+        # Debug plotting
+        DEBUG_STRIDE = 10
+        plt.close('all')
+        for i in range(0, len(raw_results), DEBUG_STRIDE):
+            visualize_frame_output(i, self.video_data, raw_results[i])
+            plt.savefig(f'grounding_out_{i}.png')
+        plt.close('all')
+
+        return results

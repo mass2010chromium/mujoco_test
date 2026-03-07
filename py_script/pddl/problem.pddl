@@ -21,5 +21,5 @@
   (closed drawers)
   (free arm)
  )
- ;(:goal (on bowl1 plate))
+ (:goal (on bowl1 plate))
 )
