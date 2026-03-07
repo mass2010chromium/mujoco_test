@@ -23,17 +23,14 @@
   (closed ?x - scene_object)                ; Container is closed. Cannot have objects placed in it.
  )
 
- (:action pickup_from ; Pick up object x from on object z.
+ (:action pickup_from ; Pick up object x from on object z. To pick up a stack of objects, pick up the bottom object
   :parameters (?x - graspable ?r - robot ?z - scene_object)
   :precondition 
   (and 
    (free ?r)
-   (or  ; The object we pick up should be on or in something...
+   (or  ; The object we pick up should be on or in something (not held in hand)
      (on ?x ?z)
      (and (in ?x ?z) (not (closed ?z)))
-   )
-   (forall (?o - scene_object)  ; and it should not have anything on it.
-     (not (on ?o ?x))
    )
   )
   :effect 
@@ -45,7 +42,7 @@
   )
  )
 
- (:action place_on ; Place object x onto object z.
+ (:action place_on ; Place object x onto object z. (Stacks them)
   :parameters (?x - graspable ?r - robot ?z - scene_object)
   :precondition
   (and
