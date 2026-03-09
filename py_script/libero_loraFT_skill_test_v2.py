@@ -1,3 +1,5 @@
+import time
+t0 = time.monotonic()
 """
 Adapted from openpi libero eval script
 REQUIRES: robosuite 1.4.0
@@ -221,6 +223,8 @@ if __name__ == "__main__":
             # act for the first time
             prompt = prompt_from_obs(obs, task_description, skill=current_skill, mode='acting')
             result = policy.infer(prompt)
+            t1 = time.monotonic()
+            print("Time elapsed before running execution loop:", t1 - t0)
             infer_count += 1
             actions = result['actions']
 
@@ -268,16 +272,21 @@ if __name__ == "__main__":
                     mediapy.write_image('trial_imgs/frame_wrist' + str(i) + '.png', np.copy(obs['robot0_eye_in_hand_image'][::-1, ::-1, :]))
                 
                     trajectory_idx = 0
-                
+
             if done:
                 trials_success.append(1)
             else:
                 trials_success.append(0)
-            mediapy.write_image('franka_libero_f0.png', frames[0])
+            t2 = time.monotonic()
+            print("Execution took", t2 - t1)
             mediapy.write_video('franka_libero_v2_' + str(task_id) + '.mp4', frames, fps=FRAME_RATE)
+            t3 = time.monotonic()
+            print("Writing videos took", t3 - t2)
             # mediapy.write_video('franka_libero_wrist_v2.mp4', wrist_frames, fps=FRAME_RATE)
-        #     break
-        # break
+            # NOTE: remove breaks here to run full dataset
+            print("Exiting early")
+            break
+        break
 
     print(f"Trials success: {trials_success}")
     print(f"Trials success rate: {sum(trials_success) / len(trials_success)}")
