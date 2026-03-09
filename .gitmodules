@@ -22,9 +22,9 @@
 	path = thirdparty/sam3_weights
 	url = https://huggingface.co/1038lab/sam3.git
     ignore = dirty
-[submodule "llm_apis"]
-	path = llm_apis
-	url = https://github.com/mass2010chromium/llm_apis.git
 [submodule "vendored/pddlsim"]
 	path = vendored/pddlsim
 	url = https://github.com/mass2010chromium/pddlsim.git
+[submodule "llm_apis"]
+	path = llm_apis
+	url = https://github.com/mass2010chromium/llm_apis.git
