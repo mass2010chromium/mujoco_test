@@ -16,6 +16,7 @@ print("PDDL interactive")
 print(f"Problem name: {problem.name}")
 print("Problem goal(s):")
 print(repr(problem.raw_problem.goals_section))
+print(simulator)
 #while not simulator.is_solved():
 while True:
     actions = list(simulator.get_grounded_actions())
