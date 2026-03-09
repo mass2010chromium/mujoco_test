@@ -118,16 +118,18 @@ def infer_until_action(policy, prompt, max_think_rounds=8):
 
 
 LIBERO_ENV_RESOLUTION = 224
-TRIALS_PER_TASK = 10
+TRIALS_PER_TASK = 1
 SEED = 7
-EPISODE_LENGTH = 400
+EPISODE_LENGTH = 1000
 FRAME_RATE = 20
 
 
 if __name__ == "__main__":
     benchmark_dict = benchmark.get_benchmark_dict()
-    task_suite = benchmark_dict["libero_90"]()
+    # task_suite = benchmark_dict["libero_90"]()
     # task_suite = benchmark_dict['libero_spatial']()
+    task_suite = benchmark_dict['libero_goal']()
+    # task_suite = benchmark_dict["libero_10"]()
     num_tasks_in_suite = task_suite.n_tasks
 
     openpi_root = pathlib.Path(__file__).resolve().parent.parent / "pace" / "openpi"
@@ -143,18 +145,23 @@ if __name__ == "__main__":
             / "checkpoints"
             / "pi05_libero_reason_lora"
             / "pi05_libero_reason_lora"
-            / "30000"
+            / "31799"
         ),
         assets_dir=assets_dir,
     )
     print("Done.")
+    trials_success = []
 
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
         task = task_suite.get_task(task_id)
         initial_states = task_suite.get_task_init_states(task_id)
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, SEED)
 
-        if task_id != 5:
+        # task_description = "pick up the wine bottle"
+        # task_description = "grasp the stove knob"
+        task_description = "open the top drawer of the cabinet"
+
+        if task_id != 2:       # test task 10 --> drawer closed initially
             continue
 
         for episode_idx in tqdm.tqdm(range(TRIALS_PER_TASK)):
@@ -172,6 +179,7 @@ if __name__ == "__main__":
             frames = []
             wrist_frames = []
             trajectory_idx = 0
+            done = False
 
             for i in range(EPISODE_LENGTH):
                 act = np.copy(actions[trajectory_idx])
@@ -199,8 +207,15 @@ if __name__ == "__main__":
                     )
                     trajectory_idx = 0
 
+            if done:
+                trials_success.append(1)
+            else:
+                trials_success.append(0)
             mediapy.write_image("franka_libero_f0.png", frames[0])
-            mediapy.write_video("franka_libero.mp4", frames, fps=FRAME_RATE)
-            mediapy.write_video("franka_libero_wrist.mp4", wrist_frames, fps=FRAME_RATE)
-            break
-        break
+            mediapy.write_video("franka_libero_reason_" + str(task_id) + ".mp4", frames, fps=FRAME_RATE)
+            # mediapy.write_video("franka_libero_wrist_reason_" + str(task_id) + ".mp4", wrist_frames, fps=FRAME_RATE)
+        #     break
+        # break
+
+    print(f"Trials success: {trials_success}")
+    print(f"Trials success rate: {sum(trials_success) / len(trials_success)}")

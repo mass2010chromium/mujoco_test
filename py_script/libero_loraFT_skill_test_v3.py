@@ -103,7 +103,8 @@ def prompt_from_obs(obs, task, scene_plan='', skill='', mode='thinking'):
 
     if mode == 'thinking':
         if scene_plan == '':
-            thought_prefix = task
+            # thought_prefix = task
+            thought_prefix = 'Instruction: ' + task
         else:
             thought_prefix = scene_plan
 
@@ -134,7 +135,7 @@ LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 LIBERO_ENV_RESOLUTION = 224 # resolution used to render training data
 TRIALS_PER_TASK = 1
 SEED = 7
-EPISODE_LENGTH = 600
+EPISODE_LENGTH = 400
 FRAME_RATE = 20
 
 if __name__ == "__main__":
@@ -158,7 +159,7 @@ if __name__ == "__main__":
             / "openpi"
             / "checkpoints"
             / "pi05_libero_skill_reason_lora_v2"
-            / "pi05_libero_skill_reason_lora_v2"
+            / "pi05_libero_skill_reason_lora_v3"
             / "50000"
         ),
         assets_dir=assets_dir,
@@ -182,7 +183,7 @@ if __name__ == "__main__":
         # task_description = "put the black bowl inside the drawer"
 
         infer_count = 0
-        think_freq = 3
+        think_freq = 4
         for episode_idx in tqdm.tqdm(range(TRIALS_PER_TASK)):
             env.reset()
             obs = env.set_init_state(initial_states[episode_idx])
@@ -192,7 +193,12 @@ if __name__ == "__main__":
             scene_plan = ''
             # scene_plan = '1. OPEN(top drawer of the cabinet) 2. PICK(black bowl) 3. PLACE(black bowl, top drawer of the cabinet, inside) 4. CLOSE(top drawer of the cabinet)'
             # scene_plan = '1. OPEN(top drawer of the cabinet)'
-            # scene_plan = '1. OPEN(top drawer)'
+            # scene_plan = '1. PICK(frying pan) 2. PLACE(frying pan, stove, on top of)'
+
+            # scene_plan = '1. PICK(black bowl) 2. PLACE(black bowl, bottom drawer, inside) 3. CLOSE(bottom drawer)'
+            
+            # scene_plan = '1. PICK(wine bottle)'
+            # scene_plan = '1. GRASP(stove knob)'
             scene_plan = '1. OPEN(top drawer of the cabinet)'
 
             current_skill = ''
@@ -246,6 +252,7 @@ if __name__ == "__main__":
                     break
 
                 if trajectory_idx == (len(actions) // 2):
+                    trajectory_idx = 0
 
                     # when it's time to think, call infer to update plan
                     if infer_count % think_freq == 0:
@@ -257,7 +264,8 @@ if __name__ == "__main__":
                             current_skill = skill
                         print(f"[Step {i}] Reasoning skill (thinking): {current_skill}")
 
-                    prompt = prompt_from_obs(obs, task_description, skill=current_skill, mode='acting')
+                    # current_skill = 'OPEN(bottom drawer)'
+                    prompt = prompt_from_obs(obs, task_description, scene_plan=scene_plan, skill=current_skill, mode='acting')
                     result = policy.infer(prompt)
                     infer_count += 1
                     actions = result['actions']
@@ -266,16 +274,15 @@ if __name__ == "__main__":
 
                     mediapy.write_image('trial_imgs/frame_agentview' + str(i) + '.png', np.copy(obs['agentview_image'][::-1, ::-1, :]))
                     mediapy.write_image('trial_imgs/frame_wrist' + str(i) + '.png', np.copy(obs['robot0_eye_in_hand_image'][::-1, ::-1, :]))
-                
-                    trajectory_idx = 0
+                    
                 
             if done:
                 trials_success.append(1)
             else:
                 trials_success.append(0)
             mediapy.write_image('franka_libero_f0.png', frames[0])
-            mediapy.write_video('franka_libero_v2_' + str(task_id) + '.mp4', frames, fps=FRAME_RATE)
-            # mediapy.write_video('franka_libero_wrist_v2.mp4', wrist_frames, fps=FRAME_RATE)
+            mediapy.write_video('franka_libero_v3_' + str(task_id) + '.mp4', frames, fps=FRAME_RATE)
+            # mediapy.write_video('franka_libero_wrist_v3_' + str(task_id) + '.mp4', wrist_frames, fps=FRAME_RATE)
         #     break
         # break
 
