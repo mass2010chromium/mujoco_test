@@ -36,8 +36,6 @@ set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 
 # 1. Install uv package manager
 cd "$SCRIPT_DIR"
-git submodule init
-git submodule update --recursive
 bash install_scripts/install_uv.sh
 source ~/.local/bin/env
 # END install uv
@@ -54,6 +52,9 @@ if [[ $? -eq 0 ]]; then
 	
 	# 2.2a. Run install scripts using slurm
     echo "Found sbatch, running install with sbatch"
+    srun git submodule init
+    srun git lfs install
+    srun git submodule update --recursive
     sbatch --gpus="$GPU_NAME" --nodefile="pace/nodes_$GPU_NAME.txt" -W pace/install_scripts/install_py_packages.sh
 
 	echo "If running on PACE, you may run into issues with your .cache directory eating your entire disk quota."
@@ -63,8 +64,11 @@ if [[ $? -eq 0 ]]; then
 	echo "mv .cache scratch/.cache"
 	echo "ln -s -T scratch/.cache .cache"
 else
-	# 2.1b. Run install scripts without slurm
-	cd ../
+    # 2.1b. Run install scripts without slurm
+    cd ../
+    git submodule init
+    git lfs install
+    git submodule update --recursive
     echo "No sbatch found, running install without sbatch"
     bash pace/install_scripts/install_py_packages.sh
 fi
