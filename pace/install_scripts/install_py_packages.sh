@@ -26,30 +26,31 @@ cd ..
 
 
 ### BEGIN Madrona-MJX install
-cd madrona_mjx
-git submodule update --init --recursive
-
-mkdir build
-cd build
-cmake ..
-make -j4
-cd ..
-uv pip install -e .
+# cd madrona_mjx
+# git submodule update --init --recursive
+# 
+# mkdir build
+# cd build
+# cmake ..
+# make -j4
+# cd ..
+# uv pip install -e .
+# cd ..
+### END Madrona-MJX install
 
 # Seems like at some point jax gets reinstalled... let's fix that
 uv pip install -U "jax[cuda12]<0.6.0" --index-url https://pypi.org/simple --force-reinstall
-### END Madrona-MJX install
-
 
 ### LIBERO
-cd ../lerobot-libero
+cd lerobot-libero
 git apply ../pace/install_scripts/lerobot-libero.patch
 uv pip install -r requirements.txt
 uv pip install -e .
+cd ..
 
 
 ### Pi0 install
-cd ../pace/install_scripts
+cd pace/install_scripts
 bash install_pi0.sh
 
 ### notebook install

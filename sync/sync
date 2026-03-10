@@ -1,0 +1,113 @@
+#!/bin/env python3
+
+import os
+import pathlib
+import shutil
+
+def is_dir_empty(path):
+    if not os.path.exists(path):
+        return True
+    for _ in os.scandir(path):
+        return False
+    return True
+
+SYNC_ROOT = "/mnt/gatechvla/"
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('target', nargs='?', default='.', help="Directory or file to synchronize. (defaults to current running directory)")
+    args = parser.parse_args()
+
+    cur_path = pathlib.Path(os.path.abspath(args.target))
+    mod_path = pathlib.Path(SYNC_ROOT)/ os.path.join(*cur_path.parts[2:])
+
+    # Handle local path being nonexistent
+    if not os.path.exists(cur_path):
+        print("Creating local link")
+        # Link to an existing directory or file.
+        if os.path.exists(mod_path):
+            if os.path.isdir(mod_path):
+                ftype = 'directory'
+            else:
+                ftype = 'file'
+            os.symlink(mod_path, cur_path, target_is_directory=(ftype == 'directory'))
+            print(f"Linked [new] {cur_path} to [{ftype}] {mod_path}")
+            exit(0)
+
+        # Create a pair of directories.
+        print("WARNING: Neither path exists. Both paths will be created as directories.")
+        res = input("Are you sure about this? [Y/N] ").strip().lower()
+        if res == 'n':
+            print("Exiting")
+            exit(1)
+
+        os.makedirs(mod_path, exist_ok=True)
+        os.makedirs(cur_path.parent, exist_ok=True)
+
+        os.symlink(mod_path, cur_path, target_is_directory=True)
+        print(f"linked [directory] {cur_path} to [directory] {mod_path}")
+        exit(0)
+
+    # Handle if local path is directory
+    elif os.path.isdir(cur_path):
+        print("Linking local directory")
+        if os.path.exists(mod_path) and not os.path.isdir(mod_path):
+            print("ERROR: Tried to link a directory (local) to a non directory file (storage)")
+            exit(1)
+        # Path doesn't exist, or is a directory. Either is OK
+        if is_dir_empty(cur_path):
+            # Always safe to proceed.
+            if os.path.exists(mod_path):
+                ftype = 'directory'
+            else:
+                os.makedirs(mod_path)
+                ftype = 'new'
+            os.rmdir(cur_path)
+            # target_is_directory is ignored except on windows, but whatever
+            os.symlink(mod_path, cur_path, target_is_directory=True)
+            print(f"Linked [directory] {cur_path} to [{ftype}] {mod_path}")
+            exit(0)
+        elif is_dir_empty(mod_path):
+            # Current is non empty but modified is empty.
+            print("WARNING: Current directory is nonempty but target path is empty.")
+            print("Files will be moved to storage and directory linked.")
+            res = input("Are you sure about this? [Y/N] ").strip().lower()
+            if res == 'n':
+                print("Exiting")
+                exit(1)
+
+            # Make target dir and copy files
+            if os.path.exists(mod_path):
+                ftype = 'directory'
+            else:
+                os.makedirs(mod_path.parent, exist_ok=True)
+                ftype = 'new'
+
+            # Use copy instead of copy2 to avoid crash due to metadata copy failures
+            shutil.copytree(cur_path, mod_path, copy_function=shutil.copy, dirs_exist_ok=True)
+
+            shutil.rmtree(cur_path)
+            os.symlink(mod_path, cur_path, target_is_directory=True)
+            print(f"Linked [directory] {cur_path} to [{ftype}] {mod_path}")
+            exit(0)
+
+        # Neither directory is empty. Error
+        print("ERROR: Both local and storage directories are non empty.")
+        exit(1)
+
+    ## Handle local path being a file
+    print("Linking local file")
+    # Fail if we try to link to an existing path
+    if os.path.exists(mod_path):
+        print("ERROR: Tried to link a file (local) to an already existent file (storage)")
+        print("Resolve this conflict yourself!")
+        exit(1)
+
+    os.makedirs(mod_path.parent, exist_ok=True)
+    # Use copy instead of copy2 to avoid crash due to metadata copy failures
+    shutil.copy(cur_path, mod_path)
+
+    os.remove(cur_path)
+    os.symlink(mod_path, cur_path, target_is_directory=True)
+    print(f"Linked [file] {cur_path} to [new] {mod_path}")
