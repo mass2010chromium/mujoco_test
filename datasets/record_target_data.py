@@ -3,7 +3,7 @@ import math
 import os
 from pathlib import Path
 import sys
-os.environ["MUJOCO_GL"] = "osmesa"
+os.environ["MUJOCO_GL"] = "egl"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".25"
 
 import jax.numpy as jnp
@@ -70,7 +70,7 @@ def create_pi05(model_name, checkpoint_dir=None, assets_dir=None):
     )
     return policy
 
-def prompt_from_obs(obs, task, scene_plan=''):
+def prompt_from_obs(obs, task, scene_plan='', skill='', mode='thinking'):
     """Build observation dict for Pi0Fuse inference.
 
     The thought prefix must match the training format from cot_simple.json:
@@ -85,27 +85,28 @@ def prompt_from_obs(obs, task, scene_plan=''):
             obs["robot0_gripper_qpos"],
         )
     )
+
+    print("current scene plan: ", scene_plan)
+
+    if mode == 'thinking':
+        if scene_plan == '':
+            thought_prefix = task
+        else:
+            thought_prefix = scene_plan
+        text_input = thought_prefix
+    
+    else:
+        print(f"Skill: {skill}")
+        text_input = skill
+
     return {
         'observation/image': obs['agentview_image'][::-1, ::-1, :],
         'observation/wrist_image': obs['robot0_eye_in_hand_image'][::-1, ::-1, :],
         "observation/state": state_vec,
         'prompt': task,
+        'thought': [text_input],
+        'mode': mode,
     }
-
-def infer_until_action(policy, prompt, max_think_rounds=8):
-    """Query the policy until it returns actions (not a thinking response)."""
-    result = policy.infer(prompt)
-    think_round = 0
-    while result.get("isthinking", False):
-        think_round += 1
-        print(f"[Thinking {think_round}] {result.get('thought', '')}")
-        if think_round >= max_think_rounds:
-            raise RuntimeError(
-                f"Policy is still thinking after {max_think_rounds} rounds; "
-                "aborting this rollout."
-            )
-        result = policy.infer(prompt)
-    return result
 
 def _get_libero_env(task, resolution, seed):
     """Initializes and returns the LIBERO environment, along with the task description."""
@@ -144,6 +145,7 @@ if __name__ == "__main__":
     parser.add_argument("dataset", help="dataset name (ex. libero_10)")
     parser.add_argument("--repeats", type=int, default=10, help="Number of times to run each experiment")
     parser.add_argument("--seed", type=int, default=0, help="Libero simulation seed")
+    parser.add_argument("--token-count", type=int, default=1, help="Number of tokens to probe from")
     args = parser.parse_args()
 
     N_REPEATS = args.repeats
@@ -170,15 +172,20 @@ if __name__ == "__main__":
     with open(meta_file, 'w') as f:
         json.dump(meta, f)
 
+    openpi_root = Path(__file__).resolve().parent.parent / "pace" / "openpi"
+    assets_dir = openpi_root / "assets" / "pi05_libero_skill_reason_lora_v2"
+    checkpoint_dir = (
+        openpi_root
+        / "checkpoints"
+        / "pi05_libero_skill_reason_lora_v2"
+        / "pi05_libero_skill_reason_lora_v2"
+        / "30000"
+    )
     # Create a trained policy.
     policy = create_pi05(   # Use LoRA weights:
         'pi05_libero_reason_lora',
-        # checkpoint_dir='../pace/openpi/checkpoints/pi05_libero_reason_lora/pi05_libero_reason_lora/7999',
-        checkpoint_dir='../pace/openpi/checkpoints/pi05_libero_reason_lora/pi05_libero_reason_lora/31799',
-        assets_dir='../pace/openpi/assets/pi05_libero_reason_lora'
-        # 'pi05_libero_10_reason_lora',
-        # checkpoint_dir='../pace/openpi/checkpoints/pi05_libero_10_reason_lora/pi05_libero_10_reason_lora/1500',
-        # assets_dir='../pace/openpi/assets/pi05_libero_10_reason_lora'
+        checkpoint_dir=checkpoint_dir,
+        assets_dir=assets_dir
     )
 
     n_tasks = libero_envs.get_num_tasks()
@@ -225,12 +232,23 @@ if __name__ == "__main__":
             ).as_exp_coords()
 
             policy.start()
-            prompt = prompt_from_obs(obs, task_description)
-            vla_output = infer_until_action(policy, prompt)
-            intermediates = policy.saved_intermediates
+            # first, think once to populate the plan
+            prompt = prompt_from_obs(obs, task_description, scene_plan='', mode='thinking')
+            result = policy.infer(prompt)
+            scene_plan = result['subtask']  # Error if none... please be a good vla
+
+            prompt = prompt_from_obs(obs, task_description, scene_plan=scene_plan, mode='thinking')
+            result = policy.infer(prompt)
+            skill = result['subtask']  # Error if none... please be a good vla
+            print(f'{scene_plan = }')
+            print(f'initial {skill = }')
+
+            prompt = prompt_from_obs(obs, task_description, skill=skill, mode='acting')
+            vla_output = policy.infer(prompt)
+            intermediates = policy.saved_intermediates[0][:, :, -args.token_count:, :]
             actions = vla_output['actions']
 
-            all_intermediates = [intermediates[0]]
+            all_intermediates = [intermediates]
             all_actions = [np.array(actions)]
             all_targets = [rel_transform]
 
@@ -240,14 +258,16 @@ if __name__ == "__main__":
                 obs, reward, done, info = env.step(act)
                 trajectory_idx += 1
                 if trajectory_idx == (len(actions)//2):
-                    prompt = prompt_from_obs(obs, task_description)
-                    vla_output = infer_until_action(policy, prompt)
+                    # Don't update the skill -- short trajectory
+                    prompt = prompt_from_obs(obs, task_description, skill=skill, mode='acting')
+                    vla_output = policy.infer(prompt)
                     actions = vla_output['actions']
                     trajectory_idx = 0
                     media.write_image("frame.png", obs['agentview_image'][::-1, ::-1, :])
                     media.write_image("wrist_frame.png", obs['robot0_eye_in_hand_image'][::-1, ::-1, :])
 
-                    intermediates = policy.saved_intermediates
+                    # layer, batch, token, dimension
+                    intermediates = policy.saved_intermediates[0][:, :, -args.token_count:, :]
 
                     aligned_robot_frame = RigidTransform.from_components(
                         translation=obs["robot0_eef_pos"],
@@ -261,7 +281,7 @@ if __name__ == "__main__":
                         rotation=eef_rot.inv() * rel_transform.rotation
                     ).as_exp_coords()
 
-                    all_intermediates.append(intermediates[0])
+                    all_intermediates.append(intermediates)
                     all_actions.append(np.array(actions))
                     all_targets.append(rel_transform)
 

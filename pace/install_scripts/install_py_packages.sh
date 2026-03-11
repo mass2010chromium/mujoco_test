@@ -59,7 +59,6 @@ bash install_notebook.sh
 ### SAM3, pddlsim install
 bash install_grounding.sh
 
-
-### robosuite
-# TODO: move to uv
-#uv pip install mink==0.0.5 qpsolvers==4.8.2 quadprog==0.1.13 robosuite==1.5.2
+### Huggingface datasets issue?
+# https://github.com/Physical-Intelligence/openpi/issues/561
+uv pip install datasets==3.6.0

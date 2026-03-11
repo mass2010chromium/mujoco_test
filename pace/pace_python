@@ -26,9 +26,11 @@ if __name__ == "__main__":
     parser.add_argument('--cpus', default=2, type=int, help='Number of CPU cores desired.')
     parser.add_argument('--mem', default='32G', help='Amount of (CPU) memory desired. Use suffix K|M|G|T')
     parser.add_argument('--gpus', '-G', default='a100', help='GPU to request for the job.')
+    parser.add_argument('--no-gpu', action='store_true', help="Don't use a GPU for this job.")
     parser.add_argument('--time', default='60', help='Amount of time (in minutes) to allocate for this job.')
     parser.add_argument('--no-python', action='store_true', help="Don't launch python. Still useful if you want the virtualenv, or have your own ex. shell script you want to run in this environment. Extra arguments are interpreted as bash arguments.")
     parser.add_argument('--tunnel-port', default=None, help="Tunnel a port to the node running the python process.")
+    parser.add_argument('--env-file', default="pace/default_env.sh", help='File to source environment variables from')
 
     args, rest = parser.parse_known_args()
 
@@ -64,24 +66,27 @@ if __name__ == "__main__":
             exec_line = '$@'
         else:
             exec_line = 'python $@'
+
         script_file.write(
             f'#!/bin/env bash\n'
             f'echo "Running on nodes: $SLURM_NODELIST"\n'
 			f'module load cuda/12.9.1\n'
             f'source {VENV_LOC}\n'
-            f'MUJOCO_GL=egl {exec_line}\n'
+            f'source {args.env_file}\n'
+            f'{exec_line}\n'
         )
 
-    res = subprocess.run(['sbatch',
+    cmd_args = [
         '-J', args.job_name,
         '-F', nodefile,
         '-c', str(args.cpus),
         '-N', '1',
         '--mem', args.mem,
-        '-G', args.gpus,
         '-o', output_filename,
-        script_temp_file
-    ] + rest, capture_output=True, text=True)
+    ]
+    if not args.no_gpu:
+        cmd_args += ['-G', args.gpus]
+    res = subprocess.run(['sbatch'] + cmd_args + [script_temp_file] + rest, capture_output=True, text=True)
 
     if res.returncode != 0:
         print("sbatch failed!")

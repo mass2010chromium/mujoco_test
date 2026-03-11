@@ -18,7 +18,8 @@ args = parser.parse_args()
 
 DATASET = args.dataset
 
-data_dir = Path(__file__).parent / 'outputs_and_transforms' / DATASET
+file_dir = Path(__file__).parent
+data_dir = file_dir / 'outputs_and_transforms' / DATASET
 meta_file = data_dir / "meta.json"
 meta = json.load(open(meta_file, 'r'))
 
@@ -34,6 +35,7 @@ with open(info_file, 'r') as f:
 def get_sample(task_name, instance):
     target = np.load(data_dir / f"{task_name}_{instance}_transform.npy")
     intermediate = jnp.load(data_dir / f"{task_name}_{instance}_intermediate.npy")
+    # time, layer, batch, token, dimension
     return intermediate[:, :, 0, -1, :], target
 
 n_samples = len(target_files)*REPEATS
@@ -57,5 +59,5 @@ with tqdm(total=n_samples) as pbar:
                 break
 
 print(f"Read {len(all_rots)} samples.")
-jnp.save(f"{DATASET}_intermediates.npy", jnp.concat(all_samples, axis=0))
-np.save(f"{DATASET}_transforms.npy", np.concatenate(all_rots, axis=0))
+jnp.save(str(file_dir / f"{DATASET}_intermediates.npy"), jnp.concat(all_samples, axis=0))
+np.save(str(file_dir / f"{DATASET}_transforms.npy"), np.concatenate(all_rots, axis=0))

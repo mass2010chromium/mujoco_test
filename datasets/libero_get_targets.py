@@ -92,6 +92,7 @@ def main():
                 all_results = json.load(f)
         except:
             pass
+    print(f"Currently have {len(all_results)} results.")
     for i, target_file in enumerate(target_files):
         if args.resume and str(i) in all_results:
             print(f"========== Skipping file {i} ==========")

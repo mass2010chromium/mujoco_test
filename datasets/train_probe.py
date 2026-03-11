@@ -44,8 +44,9 @@ def train_step(model, optimizer, intermediates, targets):
     return loss
 
 rngs = nnx.Rngs(0)
-intermediates = jnp.load(f"{DATASET}_intermediates.npy")
-_targets = np.load(f"{DATASET}_transforms.npy")
+file_dir = Path(__file__).parent
+intermediates = jnp.load(str(file_dir / f"{DATASET}_intermediates.npy"))
+_targets = np.load(str(file_dir / f"{DATASET}_transforms.npy"))
 tf = RigidTransform.from_exp_coords(_targets)
 targets = jnp.array(tf.translation)
 print(intermediates.shape)
@@ -61,6 +62,8 @@ while i < 20000:
     for j in range(0, len(intermediates), batch_size):
         intermediates_batch = intermediates[indices[j:j+batch_size]]
         targets_batch = targets[indices[j:j+batch_size]]
+        print(intermediates_batch.shape)
+        print(targets_batch.shape)
         loss = train_step(model, optimizer, intermediates_batch, targets_batch)
         i += 1
         if i % 100 == 0:
@@ -71,7 +74,7 @@ while i < 20000:
 import orbax.checkpoint as ocp
 _, state = nnx.split(model)
 checkpointer = ocp.StandardCheckpointer()
-ckpt_dir = ocp.test_utils.erase_and_create_empty(os.path.abspath('checkpoints'))
+ckpt_dir = ocp.test_utils.erase_and_create_empty(os.path.abspath(str(file_dir / 'checkpoints')))
 checkpointer.save(ckpt_dir / 'state', state)
 
 # I am too lazy to fix the error on exit....
