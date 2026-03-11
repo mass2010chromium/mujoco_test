@@ -4,6 +4,7 @@
 Wrapper around srun for running python scripts.
 """
 import argparse
+import json
 import os
 import subprocess
 import time
@@ -13,6 +14,7 @@ if __name__ == "__main__":
     VENV_LOC = os.path.join(
         'mujoco_playground', '.venv', 'bin', 'activate'
     )
+    PARTITION_FILE = os.path.join(SCRIPT_DIR, 'partitions.json')
 
     parser = argparse.ArgumentParser(
         prog='pace_python',
@@ -38,6 +40,14 @@ if __name__ == "__main__":
         print(f"Could not find VENV at relative path: {VENV_LOC}")
         print("This script must be run from repository toplevel")
         exit(1)
+
+    if not os.path.exists(PARTITION_FILE):
+        print("Could not find partitions definition file.")
+        print(f"Generate one by running: bash -c 'cd {SCRIPT_DIR}/slurm_utils; python extract_nodes.py'")
+        exit(1)
+
+    with open(PARTITION_FILE, 'r') as partition_file:
+        partition_info = json.load(partition_file)
 
     nodefile = args.nodefile
     if args.nodefile is None:
@@ -85,7 +95,7 @@ if __name__ == "__main__":
         '-o', output_filename,
     ]
     if not args.no_gpu:
-        cmd_args += ['-G', args.gpus]
+        cmd_args += ['-G', args.gpus, '--partition', partition_info[args.gpus]]
     res = subprocess.run(['sbatch'] + cmd_args + [script_temp_file] + rest, capture_output=True, text=True)
 
     if res.returncode != 0:

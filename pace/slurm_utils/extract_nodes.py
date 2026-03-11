@@ -2,6 +2,7 @@
 """
 Parse a dumped sinfo log file and extract all the GPUs and their corresponding computers on this slurm system.
 """
+import json
 import sys
 
 with open('sinfo.log', 'r') as infile:
@@ -10,9 +11,11 @@ with open('sinfo.log', 'r') as infile:
 
 avail_gpus = set()
 gpu_to_nodes = dict()
+partitions = {}
 
 for line in lines:
     gpu_info = line[2]
+    partition = line[4]
     if ':' not in gpu_info:
         continue
     gpu_name = gpu_info.split(':')[1]
@@ -21,6 +24,7 @@ for line in lines:
     if gpu_name not in gpu_to_nodes:
         gpu_to_nodes[gpu_name] = []
     gpu_to_nodes[gpu_name].extend(line[-1].split(','))
+    partitions[gpu_name] = partition
 
 avail_gpus = list(avail_gpus)
 print("Available GPUS:", avail_gpus)
@@ -28,3 +32,6 @@ for gpu in avail_gpus:
     all_nodes = ','.join(set(gpu_to_nodes[gpu]))
     with open(f"../nodes_{gpu}.txt", 'w') as out_file:
         print(all_nodes, file=out_file)
+
+with open(f"../partitions.json", 'w') as partition_file:
+    json.dump(partitions, partition_file)
