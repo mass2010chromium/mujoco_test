@@ -9,6 +9,7 @@ from llm_apis import transformers_api
 from llm_apis.response_parsing import extract_in_backticks
 
 from .pddl_parsing import setup_pddl_simulation
+from pddlsim.simulation import Simulation
 
 @dataclass
 class SceneObject:
@@ -101,11 +102,16 @@ class TaskSceneGraph:
     As part of the location, specify if the object is in the foreground or background.
 
     The robot should be called `robot_0` and have no description comment.
+
+    If an object involves different articulated components, each component should be defined as a separate object.
+    For example, a cabinet can have different drawers, a caddy can be divided into different compartments, and a wine rack can have different shelves.
+    
     Remember not to use logical expressions in the initial state -- only use predicates.
 
     """)
 
     def construct_from_pddl(self, images, raw_pddl_state, ground=True):
+        print("raw_pddl_state", raw_pddl_state)
         try:
             self.init_state, self.domain, self.simulator = setup_pddl_simulation(
                 raw_pddl_state, self.pddl_domain_desc
@@ -195,6 +201,36 @@ class TaskSceneGraph:
             }
             for x in self.simulator.get_grounded_actions()
         ]
+    
+
+    def apply_action(self, action):
+        """
+        Apply an action to the simulator. Return True if successful, False otherwise.
+        """
+        return self.simulator.apply_grounded_action(action)
+
+
+    def match_grounded_action(self, action_name: str, action_params: list[str]):
+        """
+        Match a grounded action to an action name and parameters.
+        """
+        for action in self.simulator.get_grounded_actions():
+            if action.name.value != action_name:
+                    continue
+            params = [obj.value for obj in action.grounding]
+            if params == action_params:
+                return action
+        return None
+
+    def reset_simulator(self):
+        """
+        Reset the simulator to the initial state.
+        """
+        self.simulator = Simulation.from_domain_and_problem(
+            self.domain,
+            self.init_state,
+        )
+
 
     def to_dict(self, include_grounding=False):
         """Machine readable summary of scene graph objects"""

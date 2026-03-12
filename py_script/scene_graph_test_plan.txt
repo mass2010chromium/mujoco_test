@@ -1,0 +1,2 @@
+1. PICK(silver bowl) 2. PLACE(silver bowl, top drawer of the cabinet, inside) 3. CLOSE(top drawer of the cabinet)
+1. OPEN(top drawer of the cabinet) 2. PICK(silver bowl) 3. PLACE(silver bowl, top drawer of the cabinet, inside) 4. CLOSE(top drawer of the cabinet)
