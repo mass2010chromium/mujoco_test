@@ -1,9 +1,9 @@
 #!/bin/env bash
+SCRIPT_DIR=$(cd -- "$(dirname -- "$BASH_SOURCE[0]")/" && pwd)
 
 mkdir -p ~/.local
 cd ~/.local
-PREFIX="$pwd"
-SCRIPT_DIR=$(cd -- "$(dirname -- "$BASH_SOURCE[0]")/" && pwd)
+PREFIX="$(pwd)"
 
 cd ~
 
