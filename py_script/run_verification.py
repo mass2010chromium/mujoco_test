@@ -97,7 +97,6 @@ def main():
     scene_graph = TaskSceneGraph(pddl_domain_text, vlm_interface)
     # Save some tokens for now
     #llm_out = open('tmp').read()
-    #scene_graph.construct_from_pddl(mediapy.read_image(IMAGE_PATH), llm_out, ground=False)
     scene_graph.read_image(cv2.cvtColor(cv2.imread(IMAGE_PATH), cv2.COLOR_BGR2RGB), ground=True)
     print(scene_graph.summary())
 

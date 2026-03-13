@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 os.environ["MUJOCO_GL"] = "egl"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".25"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".85"
 
 import jax.numpy as jnp
 import numpy as np
@@ -57,7 +57,7 @@ def create_pi05(model_name, checkpoint_dir=None, assets_dir=None):
         " What I have done: TBD.\n"  # Extra space here follows the original dataset formatting...
         "Now I need to do: TBD.\n"
     }
-    policy = _policy_config.create_trained_reasoning_policy(
+    policy = _policy_config.create_trained_skill_reasoning_policy(
         vla_config,
         checkpoint_dir,
         norm_stats=norm_stats,
@@ -65,7 +65,8 @@ def create_pi05(model_name, checkpoint_dir=None, assets_dir=None):
         sample_kwargs={
             "temperature": 0.0,
             "max_reasoning_steps": 256,
-            "force_initial_reasoning": True
+            "force_initial_reasoning": True,
+            "debug_prefill": True,
         }
     )
     return policy
@@ -183,7 +184,7 @@ if __name__ == "__main__":
     )
     # Create a trained policy.
     policy = create_pi05(   # Use LoRA weights:
-        'pi05_libero_reason_lora',
+        'pi05_libero_skill_reason_lora_v2',
         checkpoint_dir=checkpoint_dir,
         assets_dir=assets_dir
     )
