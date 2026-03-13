@@ -62,6 +62,7 @@ class VLAVerifier:
 
     def __init__(self, scene_graph: TaskSceneGraph, llm_interface):
         self.scene_graph = scene_graph
+        self.skill_plan = None
 
         # Dynamically build VLM and LLM requiring functions.
         self.translate_subtask = llm_interface(
@@ -303,10 +304,10 @@ class VLAVerifier:
     - likely equivalent PDDL action: close
         
     
-    Some color difference in object descriptions is allowed -- for example, the user may specify to pick up a pink cube when \
-    the scene graph only has red or blue cubes; in this case the red cube should \
+    Some color difference in object descriptions is allowed -- for example, the user may specify to pick up a black bowl when \
+    the scene graph only has silver bowls; in this case the silver bowl should \
     be chosen. You should be lenient with shades of color, \
-    (accepting silver as white or grey as black, for example),
+    (accepting silver as white or silver as black, for example),
     but you should reject translations that have different hues (red vs blue) \
     or large differences in shade (white vs black).
 
@@ -464,4 +465,61 @@ class VLAVerifier:
             "steps": steps,
             "applied_actions": applied_actions,
             "step_results": step_results,
+        }
+    
+    
+    def set_skill_plan(self, plan: str):
+        """
+        parse a string skill plan into an ordered list of skills to be executed sequentially
+        """
+        self.skill_plan = self._parse_plan_steps(plan)
+
+    
+    def verify_skill_transition(self, next_skill: str):
+        """
+        ASSUME: the skill plan has already been verified, and thus has to be executed sequentially (no forward/backward jumps)
+
+        verification 1: the next skill must be the next skill in the planned skills list (i.e. sequential execution)
+        verification 2: verify transition with grounding (i.e. previous skill is truly completed)  TODO
+        if both verifications passed, transition verification suceeds, forward simulate scene graph, and pop the skill from the planned skills list
+        if either verification fails, verification fails, no change to scene graph or skill plan
+        Returns:
+            dict with keys:
+                feasible (bool),
+                failure_reason (str | None),
+        """
+
+        # verification 1: the next skill must be the next skill in the planned skills list
+        print("next skill in list: ", self.skill_plan[0])
+        if next_skill != self.skill_plan[0]:
+            return {
+                "feasible": False,
+                "failure_reason": "Next skill is not the next skill in the planned skills list",
+            }
+        
+        # verification 2: verification with grounding (not sure how yet)
+        ##TODO
+        
+        # if both verifications passed, verification suceeds, forward simulate scene graph, and pop the skill from the planned skills list
+        result = self.verify_skill(next_skill)  # call verify_skill to get the grounded pddl action
+        if not result.accepted:
+            reason = result.reasoning
+            self.scene_graph.reset_simulator()
+            return {
+                "feasible": False,
+                "failure_reason": reason,
+            }
+
+        action_name, action_params = self._normalize_grounded_action(result.grounded_action)
+        matched_action = self.scene_graph.match_grounded_action(
+            action_name,
+            action_params,
+        )
+        self.scene_graph.apply_action(matched_action)
+
+        self.skill_plan.pop(0)
+
+        return {
+            "feasible": True,
+            "failure_reason": None,
         }
