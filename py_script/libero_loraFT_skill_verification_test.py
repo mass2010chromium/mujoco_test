@@ -208,7 +208,7 @@ EPISODE_LENGTH = 800
 FRAME_RATE = 20
 
 if __name__ == "__main__":
-    PDDL_PATH = SCRIPT_DIR / "pddl" / "libero_spatial_domain.pddl"
+    PDDL_PATH = SCRIPT_DIR / "pddl" / "libero_domain.pddl"
     IMAGE_PATH = SCRIPT_DIR / "initial_scene.png"                    # initial scene image
 
     llm_interface, vlm_interface = get_openrouter_interfaces()
@@ -274,7 +274,7 @@ if __name__ == "__main__":
             pddl_domain_text = open(PDDL_PATH).read()
             scene_graph = TaskSceneGraph(pddl_domain_text, vlm_interface)
             scene_graph.read_image(cv2.cvtColor(cv2.imread(IMAGE_PATH), cv2.COLOR_BGR2RGB), ground=True)
-            verifier = VLAVerifier(scene_graph, llm_interface)
+            verifier = VLAVerifier(scene_graph, llm_interface, vlm_interface)
 
             scene_plan = ''
 
@@ -350,9 +350,12 @@ if __name__ == "__main__":
 
                         # ============================ VERIFY THE SKILL TRANSITION ============================
                         if current_skill != skill:
-                            result = verifier.verify_skill_transition(skill)
+                            result = verifier.verify_skill_transition(
+                                next_skill=skill,
+                                image_rgb=obs['agentview_image'][::-1, ::-1, :],
+                            )
                             if not result["feasible"]:
-                                print(f"skill transition infeasible and ignored at step {i}")
+                                print(f"skill transition infeasible at step {i}, failure reason: {result['failure_reason']}")
                             else:
                                 current_skill = skill
                                 print("skill transition feasible")
