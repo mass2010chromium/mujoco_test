@@ -26,7 +26,7 @@ Recommended storage layout:
   - optionally exports an episode video with step overlays
 - `annotate_libero_skills.py`
   - renders one episode at a time into an MP4 with step overlays
-  - saves a clean initial agent-view frame for each episode by default
+  - saves clean agent-view frames for the initial scene and every annotated skill-transition boundary by default
   - queries `google/gemini-3.1-pro-preview` through OpenRouter
   - writes one JSON shard per episode
   - supports `--start-episode` and `--end-episode`
@@ -39,6 +39,12 @@ Recommended storage layout:
 - `validate_skill_annotations.py`
   - validates either partial shard files or final combined JSON files
   - checks that segment skills are valid and consistent with the numbered skill plan
+- `validate_skill_plans.py`
+  - validates either partial shard files or final combined JSON files with the symbolic scene-graph verifier
+  - reads the saved `transition_scenes/` RGB frames produced by `annotate_libero_skills.py`
+  - verifies the full skill plan first, then verifies each skill transition at the annotated boundary frames
+  - supports `--plan-only` and `--start/--end` for partial-range validation runs
+  - writes `validation_results.json` listing every failed episode and the failure stage/details
 - `package_lerobot_skill_dataset.py`
   - reuses the existing LeRobot `data/` and `meta/`
   - writes the new annotation files into a final dataset root
@@ -178,17 +184,17 @@ Important output locations inside each run:
 - `episode_shards/episode_000123.json`
 - `errors/episode_000123.error.json`
 - `run_manifest.json`
-- `initial_scenes/episode_000123.png`
+- `transition_scenes/episode_000123/transition_000_step_000000.png`
 - optionally `videos/episode_000123.mp4`
 
-If you do not want to save those clean initial frames, pass:
+If you do not want to save those clean transition-scene frames, pass:
 
 ```bash
 python scratch/mujoco_test/py_script/libero_skill_augmentation/annotate_libero_skills.py \
   --output-dir scratch/mujoco_test/data/libero-100-skill-runs/run_a \
   --start-episode 0 \
   --end-episode 200 \
-  --disable-saving-initial-scene
+  --disable-saving-transition-scene
 ```
 
 ## Step 3: combine shard outputs
@@ -219,6 +225,41 @@ python validate_skill_annotations.py \
   libero-100-skill-runs/skill_annotations.json \
   libero-100-skill-runs/cot_skill.json
 ```
+
+Run symbolic plan + transition validation on shard outputs:
+
+```bash
+python validate_skill_plans.py \
+  libero-100-skill-runs/run_a/episode_shards
+```
+
+Only validate plans for a bounded episode range:
+
+```bash
+python validate_skill_plans.py \
+  libero-100-skill-runs/run_a/episode_shards \
+  --plan-only \
+  --start 0 \
+  --end 200
+```
+
+Run symbolic plan + transition validation on the final combined files:
+
+```bash
+python validate_skill_plans.py \
+  libero-100-skill-runs/skill_annotations.json
+```
+
+If a combined file draws episodes from multiple annotation runs and auto-discovery is ambiguous, pass one or more explicit transition-scene roots:
+
+```bash
+python validate_skill_plans.py \
+  libero-100-skill-runs/skill_annotations.json \
+  --transition-scene-root libero-100-skill-runs/run_a/transition_scenes \
+  --transition-scene-root libero-100-skill-runs/run_b/transition_scenes
+```
+
+The symbolic validator can also read the training-style `cot_skill.json`; it reconstructs the canonical skill boundaries by merging adjacent same-skill segments before running plan and transition checks.
 
 ## Step 4: package the final LeRobot dataset root
 

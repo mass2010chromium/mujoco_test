@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -25,13 +26,16 @@ from common import (  # noqa: E402
     build_video_data_url,
     cumulative_episode_bounds,
     episode_shard_path,
+    load_json,
     load_episode_records,
     load_lerobot_dataset,
     normalize_model_steps,
     render_episode_video,
     resolve_dataset_root,
-    save_initial_scene_image,
     save_json_atomic,
+    save_transition_scene_images,
+    transition_scene_episode_dir,
+    transition_scene_paths,
 )
 
 
@@ -93,7 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=4096,
+        default=16000,
         help="Maximum completion tokens for the OpenRouter response.",
     )
     parser.add_argument(
@@ -122,9 +126,12 @@ def parse_args() -> argparse.Namespace:
         help="Do not send a response_format json_schema request. Use only if the provider rejects structured output.",
     )
     parser.add_argument(
-        "--disable-saving-initial-scene",
+        "--disable-saving-transition-scene",
         action="store_true",
-        help="Disable saving a clean initial agent-view frame for each episode under output-dir/initial_scenes.",
+        help=(
+            "Disable saving clean agent-view frames for each skill-boundary transition under "
+            "output-dir/transition_scenes."
+        ),
     )
     return parser.parse_args()
 
@@ -305,7 +312,7 @@ def ensure_manifest(path: Path, *, args: argparse.Namespace, dataset_root: Path,
         "end_episode": args.end_episode if args.end_episode is not None else total_episodes,
         "total_episodes": total_episodes,
         "structured_output": not args.disable_structured_output,
-        "save_initial_scene": not args.disable_saving_initial_scene,
+        "save_transition_scenes": not args.disable_saving_transition_scene,
     }
     save_json_atomic(path, manifest)
 
@@ -335,13 +342,13 @@ def main() -> int:
     shard_dir = output_dir / "episode_shards"
     error_dir = output_dir / "errors"
     video_dir = output_dir / "videos"
-    initial_scene_dir = output_dir / "initial_scenes"
+    transition_scene_dir = output_dir / "transition_scenes"
     shard_dir.mkdir(parents=True, exist_ok=True)
     error_dir.mkdir(parents=True, exist_ok=True)
     if args.keep_videos:
         video_dir.mkdir(parents=True, exist_ok=True)
-    if not args.disable_saving_initial_scene:
-        initial_scene_dir.mkdir(parents=True, exist_ok=True)
+    if not args.disable_saving_transition_scene:
+        transition_scene_dir.mkdir(parents=True, exist_ok=True)
 
     ensure_manifest(output_dir / "run_manifest.json", args=args, dataset_root=dataset_root, total_episodes=total_episodes)
 
@@ -362,25 +369,35 @@ def main() -> int:
         record = records[episode_index]
         shard_path = episode_shard_path(shard_dir, episode_index)
         error_path = error_dir / f"episode_{episode_index:06d}.error.json"
-        initial_scene_path = (
-            initial_scene_dir / f"episode_{episode_index:06d}.png"
-            if not args.disable_saving_initial_scene
+        episode_transition_dir = (
+            transition_scene_episode_dir(transition_scene_dir, episode_index)
+            if not args.disable_saving_transition_scene
             else None
         )
 
         if shard_path.exists():
-            if (
-                initial_scene_path is not None
-                and args.skip_existing
-                and not args.overwrite_existing
-                and not initial_scene_path.exists()
-            ):
-                save_initial_scene_image(
-                    dataset,
-                    record=record,
-                    episode_bounds=episode_bounds,
-                    output_path=initial_scene_path,
-                )
+            if episode_transition_dir is not None and args.skip_existing and not args.overwrite_existing:
+                try:
+                    existing_episode = load_json(shard_path)
+                    expected_paths = transition_scene_paths(
+                        transition_scene_dir,
+                        episode_index=episode_index,
+                        segments=existing_episode["segments"],
+                    )
+                    if not all(path.exists() for path in expected_paths):
+                        save_transition_scene_images(
+                            dataset,
+                            record=record,
+                            episode_bounds=episode_bounds,
+                            segments=existing_episode["segments"],
+                            output_dir=transition_scene_dir,
+                            image_key=args.image_key,
+                        )
+                except Exception as exc:
+                    print(
+                        f"  warning: could not backfill transition scenes for episode {episode_index}: {exc}",
+                        flush=True,
+                    )
             if args.skip_existing and not args.overwrite_existing:
                 skipped += 1
                 print(f"[skip] episode={episode_index} shard already exists", flush=True)
@@ -391,8 +408,8 @@ def main() -> int:
         video_path = video_dir / f"episode_{episode_index:06d}.mp4" if args.keep_videos else output_dir / f".episode_{episode_index:06d}.mp4"
         if video_path.exists() and args.overwrite_existing:
             video_path.unlink()
-        if initial_scene_path is not None and initial_scene_path.exists() and args.overwrite_existing:
-            initial_scene_path.unlink()
+        if episode_transition_dir is not None and episode_transition_dir.exists():
+            shutil.rmtree(episode_transition_dir)
 
         episode_t0 = time.time()
         print(
@@ -402,13 +419,6 @@ def main() -> int:
         )
 
         try:
-            if initial_scene_path is not None and not initial_scene_path.exists():
-                save_initial_scene_image(
-                    dataset,
-                    record=record,
-                    episode_bounds=episode_bounds,
-                    output_path=initial_scene_path,
-                )
             if not video_path.exists():
                 render_episode_video(
                     dataset,
@@ -440,6 +450,15 @@ def main() -> int:
                 prompt_version=PROMPT_VERSION,
                 raw_response=result["parsed_output"],
             )
+            if episode_transition_dir is not None:
+                save_transition_scene_images(
+                    dataset,
+                    record=record,
+                    episode_bounds=episode_bounds,
+                    segments=episode_annotation["segments"],
+                    output_dir=transition_scene_dir,
+                    image_key=args.image_key,
+                )
             save_json_atomic(shard_path, episode_annotation)
             if error_path.exists():
                 error_path.unlink()

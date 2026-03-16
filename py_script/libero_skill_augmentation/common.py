@@ -21,9 +21,8 @@ SKILL_ARG_COUNTS: dict[str, int] = {
     "PICKUP_FROM": 2,
     "OPEN": 1,
     "CLOSE": 1,
-    "ROTATE": 1,
-    "GRASP": 1,
-    "RELEASE": 1,
+    "TURN_ON": 1,
+    "TURN_OFF": 1,
 }
 
 SKILL_DEFINITIONS = """Allowed skill set and exact syntax:
@@ -58,26 +57,19 @@ SKILL_DEFINITIONS = """Allowed skill set and exact syntax:
 - should be a single object with no commas in the description
 - Example: CLOSE(drawer)
 
-6) ROTATE(object)
-- object: the object being rotated
+6) TURN_ON(object)
+- object: the object being turned on
 - should be a single object with no commas in the description
-- Example: ROTATE(stove knob)
+- Example: TURN_ON(stove)
 
-7) GRASP(object)
-- object: the object being grasped
+7) TURN_OFF(object)
+- object: the object being turned off
 - should be a single object with no commas in the description
-- Example: GRASP(stove knob)
-
-8) RELEASE(object)
-- object: the object being released
-- should be a single object with no commas in the description
-- Example: RELEASE(stove knob)
+- Example: TURN_OFF(stove)
 
 Notes:
-- PICKUP_FROM is only for movable objects such as mugs, bowls, and boxes.
-- GRASP and RELEASE are for non-movable fixtures or controls such as knobs and handles.
-- Prefer OPEN/CLOSE for drawers or doors when the articulated object is being opened or closed.
-- Prefer ROTATE for fixed rotatable controls such as stove knobs.
+- PICKUP_FROM is only for movable objects such as mugs, bowls, and pots that can be picked up and placed.
+- Prefer OPEN/CLOSE for drawers or doors when the object is being opened or closed.
 - Prefer PLACE_ON for support surfaces and PLACE_IN for containment.
 """
 
@@ -319,6 +311,34 @@ def skill_list_from_segments(segments: list[dict[str, Any]]) -> list[str]:
     return [str(segment["skill"]) for segment in segments]
 
 
+def transition_boundary_steps_from_segments(segments: list[dict[str, Any]]) -> list[int]:
+    if not isinstance(segments, list) or not segments:
+        raise ValueError("Segments must be a non-empty list.")
+
+    boundary_steps: list[int] = []
+    prev_end: int | None = None
+    for idx, segment in enumerate(segments):
+        try:
+            start_step = int(segment["start_step"])
+            end_step = int(segment["end_step"])
+        except Exception as exc:
+            raise ValueError(f"Segment {idx} is missing integer start/end steps: {segment!r}") from exc
+
+        if idx == 0 and start_step != 0:
+            raise ValueError(f"First segment must start at step 0, got {start_step}.")
+        if prev_end is not None and start_step != prev_end:
+            raise ValueError(
+                f"Segments must be contiguous. Segment {idx} starts at {start_step}, expected {prev_end}."
+            )
+        if end_step <= start_step:
+            raise ValueError(f"Segment {idx} has non-positive length: {segment!r}")
+
+        boundary_steps.append(start_step)
+        prev_end = end_step
+
+    return boundary_steps
+
+
 def build_annotation_schema() -> dict[str, Any]:
     return {
         "name": "libero_skill_annotation",
@@ -375,13 +395,10 @@ Segmentation rules:
 - The returned steps must be contiguous and cover the entire episode with no gaps and no overlaps.
 - Use the step overlays in the video to estimate boundaries.
 - The plan must match the exact ordered skill sequence in the returned steps.
-- Include approach or reach motion inside the skill it serves; do not invent navigation, move, or idle skills.
-- Prefer OPEN/CLOSE for drawers or doors when the object is being opened or closed. OPEN/CLOSE should be direct and do not need to be combined with GRASP/RELEASE on the handles.
-- Use GRASP/RELEASE only for fixed controls or fixtures such as knobs or handles when grasping/releasing is semantically important.
-- Use ROTATE for rotating a fixed control such as a stove knob.
-- Use PICKUP_FROM only for movable objects like mugs, bowls, bottles, boxes, or pots.
-- Use PLACE_ON for support surfaces and PLACE_IN for containment.
 - Object descriptions must be short, specific, and contain no commas.
+- Object descriptions should contain both appearance and positional or prepositional descriptors from the task instruction. 
+    For instance, "put the white mug on the left..." should correspond to an object "left white mug".
+- The first skill cannot be PLACE_ON or PLACE_IN, as they are symbolically infeasible. 
 
 Output format:
 - Return JSON only.
@@ -713,6 +730,25 @@ def render_episode_video(
     return output
 
 
+def load_episode_frame(
+    dataset: Any,
+    *,
+    record: EpisodeRecord,
+    episode_bounds: dict[int, tuple[int, int]],
+    local_step: int,
+    image_key: str = "image",
+) -> Any:
+    if not (0 <= int(local_step) < record.length):
+        raise ValueError(
+            f"Requested local step {local_step} is out of bounds for episode {record.episode_index} "
+            f"with length {record.length}."
+        )
+
+    start, _ = episode_bounds[record.episode_index]
+    item = dataset.hf_dataset[start + int(local_step)]
+    return as_uint8_hwc(item[image_key])
+
+
 def save_initial_scene_image(
     dataset: Any,
     *,
@@ -729,6 +765,52 @@ def save_initial_scene_image(
     frame = as_uint8_hwc(item["image"])
     Image.fromarray(frame).save(output)
     return output
+
+
+def transition_scene_episode_dir(root: str | os.PathLike[str], episode_index: int) -> Path:
+    return Path(root) / f"episode_{episode_index:06d}"
+
+
+def transition_scene_paths(
+    root: str | os.PathLike[str],
+    *,
+    episode_index: int,
+    segments: list[dict[str, Any]],
+) -> list[Path]:
+    episode_dir = transition_scene_episode_dir(root, episode_index)
+    return [
+        episode_dir / f"transition_{boundary_idx:03d}_step_{step:06d}.png"
+        for boundary_idx, step in enumerate(transition_boundary_steps_from_segments(segments))
+    ]
+
+
+def save_transition_scene_images(
+    dataset: Any,
+    *,
+    record: EpisodeRecord,
+    episode_bounds: dict[int, tuple[int, int]],
+    segments: list[dict[str, Any]],
+    output_dir: str | os.PathLike[str],
+    image_key: str = "image",
+) -> list[Path]:
+    from PIL import Image
+
+    paths = transition_scene_paths(
+        output_dir,
+        episode_index=record.episode_index,
+        segments=segments,
+    )
+    for path, local_step in zip(paths, transition_boundary_steps_from_segments(segments)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame = load_episode_frame(
+            dataset,
+            record=record,
+            episode_bounds=episode_bounds,
+            local_step=local_step,
+            image_key=image_key,
+        )
+        Image.fromarray(frame).save(path)
+    return paths
 
 
 def generate_dataset_card_text(
