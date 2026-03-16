@@ -3,7 +3,7 @@
  (:types
   scene_object
   immovable - scene_object
-  graspable - scene_object
+  movable - scene_object
 
   robot
  )
@@ -11,20 +11,24 @@
  (:predicates 
   (on ?x - scene_object ?y - scene_object)  ; x is on y
   (in ?x - scene_object ?y - scene_object)  ; x is in y (y is a container)
-  (carry ?r - robot ?x - scene_object)      ; Robot is carrying object
+  (carry ?r - robot ?x - scene_object)      ; Robot is carrying movable object
   (free ?r - robot)                         ; Robot has hands free.
-                                            ;   Exactly one of `free` and `carry` must be set.
+                                            ;   If `free` is set, the robot is not `carry`ing an object.
   (openable ?x - scene_object)              ; Affordance of being a container that can be open or closed.
                                             ;   Represented as an attribute instead of a class, since either
-                                            ;   graspable or immovable objects can be openable...
+                                            ;   movable or immovable objects can be openable...
                                             ;   For example, a drawer or refridgerator.
                                             ;   Openable objects must have exactly one of `open` or `closed` set.
   (open ?x - scene_object)                  ; Container is open.
   (closed ?x - scene_object)                ; Container is closed. Cannot have objects placed in it.
+  (switchable ?x - scene_object)            ; Affordance of being a switchable object that can be turned on or off.
+                                            ;   Switchable objects must have exactly one of `turned_on` or `turned_off` set.
+  (turned_on ?x - scene_object)             ; Object is on.
+  (turned_off ?x - scene_object)            ; Object is off.
  )
 
  (:action pickup_from ; Pick up object x from on object z. To pick up a stack of objects, pick up the bottom object
-  :parameters (?x - graspable ?r - robot ?z - scene_object)
+  :parameters (?x - movable ?r - robot ?z - scene_object)
   :precondition 
   (and 
    (free ?r)
@@ -43,7 +47,7 @@
  )
 
  (:action place_on ; Place object x onto object z. (Stacks them)
-  :parameters (?x - graspable ?r - robot ?z - scene_object)
+  :parameters (?x - movable ?r - robot ?z - scene_object)
   :precondition
   (and
    (carry ?r ?x)
@@ -61,7 +65,7 @@
  )
 
  (:action place_in ; Place object x into object z.
-  :parameters (?x - graspable ?r - robot ?z - scene_object)
+  :parameters (?x - movable ?r - robot ?z - scene_object)
   :precondition
   (and
    (carry ?r ?x)
@@ -103,6 +107,34 @@
   (and
    (not (open ?x))
    (closed ?x)
+  )
+ )
+
+ (:action turn_on ; Turn on a switchable object x using robot gripper. Gripper must be free.
+  :parameters (?x - scene_object ?r - robot)
+  :precondition
+  (and
+   (free ?r)
+   (switchable ?x)
+  )
+  :effect
+  (and
+   (turned_on ?x)
+   (not (turned_off ?x))
+  )
+ )
+
+ (:action turn_off ; Turn off a switchable object x using robot gripper. Gripper must be free.
+  :parameters (?x - scene_object ?r - robot)
+  :precondition
+  (and
+   (free ?r)
+   (switchable ?x)
+  )
+  :effect
+  (and
+   (turned_off ?x)
+   (not (turned_on ?x))
   )
  )
 )
