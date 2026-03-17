@@ -53,7 +53,7 @@ if __name__ == "__main__":
 
     nodefile = args.nodefile
     if args.nodefile is None:
-        nodefile = os.path.join(SCRIPT_DIR, f'nodes_{args.gpus}.txt')
+        nodefile = os.path.join(SCRIPT_DIR, f'nodes_{args.gpus.split(":")[0]}.txt')
 
     if args.clean_logs:
         os.system('rm -f sbatch_python.log')
@@ -100,11 +100,11 @@ if __name__ == "__main__":
         if args.partition is not None:
             partition = args.partition
         else:
-            partition = partition_info[args.gpus]
+            partition = partition_info[args.gpus.split(':')[0]]
         cmd_args += [
             '-G', args.gpus,
             '-F', nodefile,
-            '--gpus-per-node', args.gpus_per_node,
+            #'--gpus-per-node', str(args.gpus_per_node),
             '--partition', partition
         ]
     elif args.partition is not None:
