@@ -1,10 +1,9 @@
 #! /bin/env bash
 #SBATCH -J InstallMujoco
 #SBATCH -N1 --ntasks-per-node=1 --cpus-per-task=4
-#SBATCH --mem 32G
 
 # Madrona-MJX install wants CUDA<12.5.1 for some reason
-module load cuda/12.1.1 || echo "module load failed, OK if running locally / without sbatch"
+module load cuda/$CUDA_MODULE || echo "module load failed, OK if running locally / without sbatch"
 
 
 ### BEGIN Mujoco install
