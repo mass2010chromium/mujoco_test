@@ -31,3 +31,4 @@
 [submodule "thirdparty/decord"]
 	path = thirdparty/decord
 	url = https://github.com/dmlc/decord.git
+    ignore = dirty
