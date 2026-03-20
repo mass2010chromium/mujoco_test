@@ -373,7 +373,7 @@ def build_multimodal_prompt(instruction: str, num_steps: int, fps: int) -> str:
     return f"""You are annotating a robot demonstration from the LIBERO benchmark.
 
 You are given:
-- a single demonstration video rendered at {fps} FPS
+- a single successful demonstration video rendered at {fps} FPS
 - frame overlays that show the current step number
 - the natural-language task instruction for this episode
 
@@ -399,6 +399,10 @@ Segmentation rules:
 - Object descriptions should contain both appearance and positional or prepositional descriptors from the task instruction. 
     For instance, "put the white mug on the left..." should correspond to an object "left white mug".
 - The first skill cannot be PLACE_ON or PLACE_IN, as they are symbolically infeasible. 
+- Assume that the given task instruction is always feasible, and the mentioned objects are always present in the scene.
+- Assume that the given demonstration is successful. 
+- Assume that the given demonstration completes the task instruction in the implied order. 
+    For instance, if the task instruction is "put both butter and cream cheese in the busket", then the demonstration trajectory first puts the butter in the bucket and then the cream cheese in the bucket, not the other way around.
 
 Output format:
 - Return JSON only.
