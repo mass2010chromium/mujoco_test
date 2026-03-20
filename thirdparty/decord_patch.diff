@@ -1,0 +1,12 @@
+diff --git a/src/video/ffmpeg/ffmpeg_common.h b/src/video/ffmpeg/ffmpeg_common.h
+index b0b973f..f0f7316 100644
+--- a/src/video/ffmpeg/ffmpeg_common.h
++++ b/src/video/ffmpeg/ffmpeg_common.h
+@@ -21,6 +21,7 @@
+ extern "C" {
+ #endif
+ #include <libavcodec/avcodec.h>
++#include <libavcodec/bsf.h>
+ #include <libavformat/avformat.h>
+ #include <libavformat/avio.h>
+ #include <libavfilter/avfilter.h>

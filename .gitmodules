@@ -28,3 +28,6 @@
 [submodule "llm_apis"]
 	path = llm_apis
 	url = https://github.com/mass2010chromium/llm_apis.git
+[submodule "thirdparty/decord"]
+	path = thirdparty/decord
+	url = https://github.com/dmlc/decord.git

@@ -23,7 +23,6 @@ if __name__ == "__main__":
     )
     parser.add_argument('--clean-logs', action='store_true', help='Set to remove logfiles in this directory before running. Does not submit a job if no extra args passed.')
     parser.add_argument('--job-name', '-J', default='pace_python', help='Name of the slurm job.')
-    parser.add_argument('--nodefile', '-F', help='File containing list of eligible nodes to run on. Automatically created as `nodes_<gpu>.txt` if left blank.')
     parser.add_argument('--partition', default="gh", help="The partition to run on. gh for gpu, gg for cpu only")
     parser.add_argument('--time', default='60', help='Amount of time (in minutes) to allocate for this job.')
     parser.add_argument('--no-python', action='store_true', help="Don't launch python. Still useful if you want the virtualenv, or have your own ex. shell script you want to run in this environment. Extra arguments are interpreted as bash arguments.")
@@ -36,10 +35,6 @@ if __name__ == "__main__":
         print(f"Could not find VENV at relative path: {VENV_LOC}")
         print("This script must be run from repository toplevel")
         exit(1)
-
-    nodefile = args.nodefile
-    if args.nodefile is None:
-        nodefile = os.path.join(SCRIPT_DIR, f'nodes_{args.gpus.split(":")[0]}.txt')
 
     if args.clean_logs:
         os.system('rm -f sbatch_python.log')
