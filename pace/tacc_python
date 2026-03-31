@@ -16,13 +16,13 @@ if __name__ == "__main__":
     )
 
     parser = argparse.ArgumentParser(
-        prog='pace_python',
+        prog='tacc_python',
         description='Launch python using SLURM with the preconfigured virtualenv and GPUs.',
         usage='%(prog)s [options] [args]',
         epilog='Additional arguments are interpreted as either arguments to `python`, or `bash` (if --no-python is passed).'
     )
     parser.add_argument('--clean-logs', action='store_true', help='Set to remove logfiles in this directory before running. Does not submit a job if no extra args passed.')
-    parser.add_argument('--job-name', '-J', default='pace_python', help='Name of the slurm job.')
+    parser.add_argument('--job-name', '-J', default='tacc_python', help='Name of the slurm job.')
     parser.add_argument('--partition', default="gh", help="The partition to run on. gh for gpu, gg for cpu only")
     parser.add_argument('--time', default='60', help='Amount of time (in minutes) to allocate for this job.')
     parser.add_argument('--no-python', action='store_true', help="Don't launch python. Still useful if you want the virtualenv, or have your own ex. shell script you want to run in this environment. Extra arguments are interpreted as bash arguments.")
