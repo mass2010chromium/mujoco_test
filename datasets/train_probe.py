@@ -1,9 +1,11 @@
 import json
 import os
 from pathlib import Path
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".25"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
 
-import jax, jax.numpy as jnp
+import jax
+#jax.config.update("jax_platforms", "gpu")
+import jax.numpy as jnp
 import numpy as np
 from scipy.spatial.transform import Rotation, RigidTransform
 
@@ -62,8 +64,8 @@ while i < 20000:
     for j in range(0, len(intermediates), batch_size):
         intermediates_batch = intermediates[indices[j:j+batch_size]]
         targets_batch = targets[indices[j:j+batch_size]]
-        print(intermediates_batch.shape)
-        print(targets_batch.shape)
+        #print(intermediates_batch.shape)
+        #print(targets_batch.shape)
         loss = train_step(model, optimizer, intermediates_batch, targets_batch)
         i += 1
         if i % 100 == 0:

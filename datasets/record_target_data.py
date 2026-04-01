@@ -207,10 +207,12 @@ if __name__ == "__main__":
 
     n_tasks = libero_envs.get_num_tasks()
     for i in range(n_tasks):
+        if i < 25:
+            print(f"========== Skipping task {i} ==========")
+            continue
         print(f"========== Processing task {i} ==========")
         task = libero_envs.task_suite.get_task(i)
         target_data = targets_map[task.name]
-        target_idx = 0
         targets = target_data['target_objects']
         print(task.name)
         print(task.language)
@@ -219,7 +221,8 @@ if __name__ == "__main__":
             print(f"  Instantiation {j}")
             obs, env, task_description = instance
 
-
+            # Track our step in the symbolic plan / position plan
+            target_idx = 0
             target_pose = get_component_transform(targets[target_idx])
             # TODO: Reject if no target_pose
             aligned_robot_frame = RigidTransform.from_components(
@@ -258,10 +261,18 @@ if __name__ == "__main__":
             trajectory_idx = 0
             skill_gen_counter = 0
             SKILL_UPDATE_FREQ = 5
-            for step in range(150):
+            last_transition_time = 0
+            step_timeout = 200
+            media.write_image("frame0.png", obs['agentview_image'][::-1, ::-1, :])
+            media.write_image("wrist_frame0.png", obs['robot0_eye_in_hand_image'][::-1, ::-1, :])
+            for step in range(500):
                 act = np.copy(actions[trajectory_idx])
                 obs, reward, done, info = env.step(act)
                 trajectory_idx += 1
+
+                if step - last_transition_time > step_timeout:
+                    print(f"{step_timeout} steps without new skill, exiting")
+                    break
                 if trajectory_idx == (len(actions)//2):
                     skill_gen_counter += 1
                     if skill_gen_counter == SKILL_UPDATE_FREQ:
@@ -275,14 +286,17 @@ if __name__ == "__main__":
                             # A bit of hopium here that the networks don't go batshit insane
                             if target_idx < (len(targets)-1):
                                 target_idx += 1
+                                last_transition_time = step
+                                skill = new_skill
+                            else:
+                                print("WARNING: ran out of steps to execute!")
+                                break
                             print(f"Target object: {targets[target_idx]['id']}, {targets[target_idx]['location']}")
                         skill_gen_counter = 0
                     prompt = prompt_from_obs(obs, task_description, skill=skill, mode='acting')
                     vla_output = policy.infer(prompt)
                     actions = vla_output['actions']
                     trajectory_idx = 0
-                    #media.write_image("frame.png", obs['agentview_image'][::-1, ::-1, :])
-                    #media.write_image("wrist_frame.png", obs['robot0_eye_in_hand_image'][::-1, ::-1, :])
 
                     # layer, batch, token, dimension
                     intermediates = policy.saved_intermediates[0][:, :, -args.token_count:, :]
@@ -304,6 +318,8 @@ if __name__ == "__main__":
                     all_actions.append(np.array(actions))
                     all_targets.append(rel_transform)
 
+            media.write_image("frame.png", obs['agentview_image'][::-1, ::-1, :])
+            media.write_image("wrist_frame.png", obs['robot0_eye_in_hand_image'][::-1, ::-1, :])
             jnp.save(output_dir / f"{task.name}_{j}_intermediate.npy", jnp.stack(all_intermediates))
             np.save(output_dir / f"{task.name}_{j}_action.npy", np.stack(all_actions))
             np.save(output_dir / f"{task.name}_{j}_transform.npy", np.stack(all_targets))

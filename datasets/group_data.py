@@ -1,10 +1,10 @@
 import json
 import os
 from pathlib import Path
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".05"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".5"
 
 import jax
-jax.default_device = jax.devices("cpu")[0]
+jax.config.update("jax_platforms", "cpu")
 import jax.numpy as jnp
 import numpy as np
 from scipy.spatial.transform import Rotation, RigidTransform
@@ -53,8 +53,8 @@ with tqdm(total=n_samples) as pbar:
                 all_rots.append(out)
                 pbar.update(1)
             except Exception as e:
-                #print("Cannot read file, skipping")
-                raise e
+                print("Cannot read file, skipping")
+                #raise e
                 pbar.update(REPEATS - i)
                 break
 

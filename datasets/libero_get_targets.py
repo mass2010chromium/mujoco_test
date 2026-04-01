@@ -45,7 +45,9 @@ Output a JSON object as your result, with the following format:
 
 ```json
 {
-  "plan": <description of the steps the robot would have to take to complete the task>,
+  "plan": [
+    <List of strings, describing the steps the robot would have to take to complete the task>,
+  ]
   "target_objects": [
     {
       "id": <object id, matching the (:objects) tag>,
@@ -57,6 +59,11 @@ Output a JSON object as your result, with the following format:
   ]
 }
 ```
+
+The target object should correspond to the steps in the plan. A single object may be \
+repeated twice -- for example, if the task is to place an object into the drawer and \
+close it, the drawer would be the object of interest for two consecutive steps, and \
+should be represented twice in a row in the `target_objects` list.
 """
 
 def main():
