@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 os.environ["MUJOCO_GL"] = "egl"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".85"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
 
 import jax.numpy as jnp
 import numpy as np
@@ -87,8 +87,6 @@ def prompt_from_obs(obs, task, scene_plan='', skill='', mode='thinking'):
         )
     )
 
-    print("current scene plan: ", scene_plan)
-
     if mode == 'thinking':
         if scene_plan == '':
             thought_prefix = task
@@ -97,7 +95,6 @@ def prompt_from_obs(obs, task, scene_plan='', skill='', mode='thinking'):
         text_input = thought_prefix
     
     else:
-        print(f"Skill: {skill}")
         text_input = skill
 
     return {
@@ -140,11 +137,30 @@ class LiberoEnvMaker:
             obs = env.set_init_state(initial_states[episode_idx])
             yield obs, env, task_description
 
+
+def get_component_transform(target_info):
+    # Try getting the target poses.
+    # First, try getting the object by ID.
+    target_id = target_info['id']
+    target_loc = target_info['location']
+    if f"{target_id}_pos" in obs:
+        state = dict(pos=obs[f'{target_id}_pos'], quat=obs[f'{target_id}_quat'])
+    elif target_loc in env.env.object_states_dict:
+        state = env.env.object_states_dict[target_loc].get_geom_state()
+    elif target_id in env.env.object_states_dict:
+        state = env.env.object_states_dict[target_id].get_geom_state()
+    else:
+        raise ValueError(f"Could not locate object {first_target}")
+    return RigidTransform.from_components(
+        translation=state['pos'],
+        rotation=Rotation.from_quat(state['quat'])
+    )
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("dataset", help="dataset name (ex. libero_10)")
-    parser.add_argument("--repeats", type=int, default=10, help="Number of times to run each experiment")
+    parser.add_argument("--repeats", type=int, default=5, help="Number of times to run each experiment")
     parser.add_argument("--seed", type=int, default=0, help="Libero simulation seed")
     parser.add_argument("--token-count", type=int, default=1, help="Number of tokens to probe from")
     args = parser.parse_args()
@@ -174,13 +190,13 @@ if __name__ == "__main__":
         json.dump(meta, f)
 
     openpi_root = Path(__file__).resolve().parent.parent / "pace" / "openpi"
-    assets_dir = openpi_root / "assets" / "pi05_libero_skill_reason_lora_v2"
+    assets_dir = openpi_root / "assets" / "pi05_libero_skill_reason_fixed"
     checkpoint_dir = (
         openpi_root
         / "checkpoints"
-        / "pi05_libero_skill_reason_lora_v2"
-        / "pi05_libero_skill_reason_lora_v2"
-        / "30000"
+        / "pi05_libero_skill_reason_fixed"
+        / "pi05_libero_skill_reason_fixed"
+        / "29999"
     )
     # Create a trained policy.
     policy = create_pi05(   # Use LoRA weights:
@@ -194,7 +210,8 @@ if __name__ == "__main__":
         print(f"========== Processing task {i} ==========")
         task = libero_envs.task_suite.get_task(i)
         target_data = targets_map[task.name]
-        first_target = target_data['target_objects'][0]
+        target_idx = 0
+        targets = target_data['target_objects']
         print(task.name)
         print(task.language)
 
@@ -202,23 +219,8 @@ if __name__ == "__main__":
             print(f"  Instantiation {j}")
             obs, env, task_description = instance
 
-            # Try getting the target poses.
-            # First, try getting the object by ID.
-            target_id = first_target['id']
-            target_loc = first_target['location']
-            if f"{target_id}_pos" in obs:
-                state = dict(pos=obs[f'{target_id}_pos'], quat=obs[f'{target_id}_quat'])
-            elif target_loc in env.env.object_states_dict:
-                state = env.env.object_states_dict[target_loc].get_geom_state()
-            elif target_id in env.env.object_states_dict:
-                state = env.env.object_states_dict[target_id].get_geom_state()
-            else:
-                raise ValueError(f"Could not locate object {first_target}")
-            target_pose = RigidTransform.from_components(
-                translation=state['pos'],
-                rotation=Rotation.from_quat(state['quat'])
-            )
 
+            target_pose = get_component_transform(targets[target_idx])
             # TODO: Reject if no target_pose
             aligned_robot_frame = RigidTransform.from_components(
                 translation=obs["robot0_eef_pos"],
@@ -234,7 +236,7 @@ if __name__ == "__main__":
 
             policy.start()
             # first, think once to populate the plan
-            prompt = prompt_from_obs(obs, task_description, scene_plan='', mode='thinking')
+            prompt = prompt_from_obs(obs, task_description, scene_plan=f'Instruction: {task.language}', mode='thinking')
             result = policy.infer(prompt)
             scene_plan = result['subtask']  # Error if none... please be a good vla
 
@@ -254,22 +256,38 @@ if __name__ == "__main__":
             all_targets = [rel_transform]
 
             trajectory_idx = 0
-            for step in range(50):
+            skill_gen_counter = 0
+            SKILL_UPDATE_FREQ = 5
+            for step in range(150):
                 act = np.copy(actions[trajectory_idx])
                 obs, reward, done, info = env.step(act)
                 trajectory_idx += 1
                 if trajectory_idx == (len(actions)//2):
-                    # Don't update the skill -- short trajectory
+                    skill_gen_counter += 1
+                    if skill_gen_counter == SKILL_UPDATE_FREQ:
+                        prompt = prompt_from_obs(obs, task_description, scene_plan=scene_plan, mode='thinking')
+                        result = policy.infer(prompt)
+                        new_skill = result['subtask']  # Error if none... please be a good vla
+                        print(f'updated {new_skill = }')
+                        if new_skill != skill:
+                            print("Updating target pose")
+                            # Advance item
+                            # A bit of hopium here that the networks don't go batshit insane
+                            if target_idx < (len(targets)-1):
+                                target_idx += 1
+                            print(f"Target object: {targets[target_idx]['id']}, {targets[target_idx]['location']}")
+                        skill_gen_counter = 0
                     prompt = prompt_from_obs(obs, task_description, skill=skill, mode='acting')
                     vla_output = policy.infer(prompt)
                     actions = vla_output['actions']
                     trajectory_idx = 0
-                    media.write_image("frame.png", obs['agentview_image'][::-1, ::-1, :])
-                    media.write_image("wrist_frame.png", obs['robot0_eye_in_hand_image'][::-1, ::-1, :])
+                    #media.write_image("frame.png", obs['agentview_image'][::-1, ::-1, :])
+                    #media.write_image("wrist_frame.png", obs['robot0_eye_in_hand_image'][::-1, ::-1, :])
 
                     # layer, batch, token, dimension
                     intermediates = policy.saved_intermediates[0][:, :, -args.token_count:, :]
 
+                    target_pose = get_component_transform(targets[target_idx])
                     aligned_robot_frame = RigidTransform.from_components(
                         translation=obs["robot0_eef_pos"],
                         rotation=Rotation.identity()
