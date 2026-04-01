@@ -207,9 +207,6 @@ if __name__ == "__main__":
 
     n_tasks = libero_envs.get_num_tasks()
     for i in range(n_tasks):
-        if i < 25:
-            print(f"========== Skipping task {i} ==========")
-            continue
         print(f"========== Processing task {i} ==========")
         task = libero_envs.task_suite.get_task(i)
         target_data = targets_map[task.name]
@@ -260,7 +257,7 @@ if __name__ == "__main__":
 
             trajectory_idx = 0
             skill_gen_counter = 0
-            SKILL_UPDATE_FREQ = 5
+            SKILL_UPDATE_FREQ = 2
             last_transition_time = 0
             step_timeout = 200
             media.write_image("frame0.png", obs['agentview_image'][::-1, ::-1, :])
