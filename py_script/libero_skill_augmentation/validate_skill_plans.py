@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 import cv2
+import copy
 
 THIS_DIR = Path(__file__).resolve().parent
 PY_SCRIPT_DIR = THIS_DIR.parent
@@ -448,7 +449,7 @@ def validate_episode_symbolically(
     dataset_root: str | None,
     transition_scene_roots: list[Path],
     plan_only: bool,
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> dict[str, Any] | None:
     episode_index = int(episode["episode_index"])
     task_index = episode.get("task_index")
@@ -509,58 +510,65 @@ def validate_episode_symbolically(
             "dataset_root": dataset_root,
         }
 
-    try:
-        transition_scene_root, transition_files = resolve_transition_scene_files(
-            source=source,
-            episode_index=episode_index,
-            canonical_segments=canonical_segments,
-            transition_scene_roots=transition_scene_roots,
-        )
-        initial_frame = load_rgb_image(transition_files[0])
-        scene_graph = TaskSceneGraph(pddl_domain_text, vlm_interface)
-        scene_graph.read_image(initial_frame, ground=False)
-        if scene_graph.simulator is None:
-            raise RuntimeError("Scene graph initialization produced no simulator.")
-        verifier = VLAVerifier(scene_graph, llm_interface, vlm_interface)
-    except Exception as exc:
-        return {
-            "source": str(source),
-            "episode_index": episode_index,
-            "task_index": int(task_index) if isinstance(task_index, int) else task_index,
-            "instruction": instruction,
-            "plan": plan,
-            "failure_stage": "scene_graph_initialization",
-            "error": f"{type(exc).__name__}: {exc}",
-            "canonical_segments": canonical_segments,
-            "repo_id": repo_id,
-            "dataset_root": dataset_root,
-        }
-
     plan_result = None
-    last_plan_error: Exception | None = None
+    last_error: Exception | None = None
+    last_stage = None
     for attempt in range(1, max_retries + 1):
+
+        # scene graph initialization
         try:
-            plan_result = verifier.verify_skill_plan(plan)
-            last_plan_error = None
-            break
+            transition_scene_root, transition_files = resolve_transition_scene_files(
+                source=source,
+                episode_index=episode_index,
+                canonical_segments=canonical_segments,
+                transition_scene_roots=transition_scene_roots,
+            )
+            initial_frame = load_rgb_image(transition_files[0])
+            scene_graph_hint = [f"Task Instruction: {instruction}"]
+            scene_graph = TaskSceneGraph(pddl_domain_text, vlm_interface)
+            scene_graph.read_image(initial_frame, hint=scene_graph_hint, ground=False)
+            if scene_graph.simulator is None:
+                raise RuntimeError("Scene graph initialization produced no simulator.")
+            verifier = VLAVerifier(scene_graph, llm_interface, vlm_interface)
+
+            scene_graph_initial_copy = copy.deepcopy(scene_graph)      # copy for skill transition validation
         except Exception as exc:
-            last_plan_error = exc
+            last_error = exc
+            last_stage = "scene_graph_initialization"
             if attempt < max_retries:
                 print(
                     f"plan verification retry {attempt}/{max_retries - 1} for episode {episode_index} after error: {exc}",
                     flush=True,
                 )
                 continue
+            else:
+                break
 
-    if last_plan_error is not None:
+        try:
+            plan_result = verifier.verify_skill_plan(plan)
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            last_stage = "plan_validation_runtime"
+            if attempt < max_retries:
+                print(
+                    f"plan verification retry {attempt}/{max_retries - 1} for episode {episode_index} after error: {exc}",
+                    flush=True,
+                )
+                continue
+            else:
+                break
+
+    if last_error is not None:
         return {
             "source": str(source),
             "episode_index": episode_index,
             "task_index": int(task_index) if isinstance(task_index, int) else task_index,
             "instruction": instruction,
             "plan": plan,
-            "failure_stage": "plan_validation_runtime",
-            "error": f"{type(last_plan_error).__name__}: {last_plan_error}",
+            "failure_stage": last_stage,
+            "error": f"{type(last_error).__name__}: {last_error}",
             "canonical_segments": canonical_segments,
             "repo_id": repo_id,
             "dataset_root": dataset_root,
@@ -588,78 +596,97 @@ def validate_episode_symbolically(
     if plan_only:
         return None
 
-    verifier.set_skill_plan(plan)
-    checked_transitions: list[dict[str, Any]] = []
+    # skill transition validation section --------------------------
+    for attempt in range(1, max_retries + 1):
+        try:
+            
+            # copy from initialized scene graph for each transition validation attempt
+            scene_graph = copy.deepcopy(scene_graph_initial_copy)
+            verifier = VLAVerifier(scene_graph, llm_interface, vlm_interface)
 
-    first_transition_result = verifier.verify_skill_transition(canonical_segments[0]["skill"])
-    first_check = build_transition_check(
-        canonical_segments=canonical_segments,
-        segment_idx=0,
-        result=first_transition_result,
-    )
-    checked_transitions.append(first_check)
-    if not first_transition_result["feasible"]:
-        return {
-            "source": str(source),
-            "episode_index": episode_index,
-            "task_index": int(task_index) if isinstance(task_index, int) else task_index,
-            "instruction": instruction,
-            "plan": plan,
-            "failure_stage": "transition_validation",
-            "plan_validation": serialized_plan_result,
-            "transition_validation": {
-                "failed_transition_index": first_check["transition_index"],
-                "failed_plan_skill_index": first_check["plan_skill_index"],
-                "failed_boundary_step": first_check["boundary_step"],
-                "previous_skill": first_check["previous_skill"],
-                "next_skill": first_check["next_skill"],
-                "failure_reason": first_check["failure_reason"],
-                "checked_transitions": checked_transitions,
-            },
-            "canonical_segments": canonical_segments,
-            "transition_scene_root": str(transition_scene_root),
-            "repo_id": repo_id,
-            "dataset_root": dataset_root,
-        }
+            verifier.set_skill_plan(plan)
+            checked_transitions: list[dict[str, Any]] = []
 
-    for segment_idx in range(1, len(canonical_segments)):
-        next_segment = canonical_segments[segment_idx]
-        image_rgb = load_rgb_image(transition_files[segment_idx])
-        print("verifying skill transition...", flush=True)
-        transition_result = verifier.verify_skill_transition(
-            next_skill=next_segment["skill"],
-            image_rgb=image_rgb,
-        )
-        transition_check = build_transition_check(
-            canonical_segments=canonical_segments,
-            segment_idx=segment_idx,
-            result=transition_result,
-        )
-        checked_transitions.append(transition_check)
+            # first transition has no image, treat as starting skill activation
+            first_transition_result = verifier.verify_skill_transition(canonical_segments[0]["skill"])
+            first_check = build_transition_check(
+                canonical_segments=canonical_segments,
+                segment_idx=0,
+                result=first_transition_result,
+            )
+            checked_transitions.append(first_check)
+            if not first_transition_result["feasible"]:
+                return {
+                    "source": str(source),
+                    "episode_index": episode_index,
+                    "task_index": int(task_index) if isinstance(task_index, int) else task_index,
+                    "instruction": instruction,
+                    "plan": plan,
+                    "failure_stage": "transition_validation",
+                    "plan_validation": serialized_plan_result,
+                    "transition_validation": {
+                        "failed_transition_index": first_check["transition_index"],
+                        "failed_plan_skill_index": first_check["plan_skill_index"],
+                        "failed_boundary_step": first_check["boundary_step"],
+                        "previous_skill": first_check["previous_skill"],
+                        "next_skill": first_check["next_skill"],
+                        "failure_reason": first_check["failure_reason"],
+                        "checked_transitions": checked_transitions,
+                    },
+                    "canonical_segments": canonical_segments,
+                    "transition_scene_root": str(transition_scene_root),
+                    "repo_id": repo_id,
+                    "dataset_root": dataset_root,
+                }
 
-        if not transition_result["feasible"]:
-            return {
-                "source": str(source),
-                "episode_index": episode_index,
-                "task_index": int(task_index) if isinstance(task_index, int) else task_index,
-                "instruction": instruction,
-                "plan": plan,
-                "failure_stage": "transition_validation",
-                "plan_validation": serialized_plan_result,
-                "transition_validation": {
-                    "failed_transition_index": transition_check["transition_index"],
-                    "failed_plan_skill_index": transition_check["plan_skill_index"],
-                    "failed_boundary_step": transition_check["boundary_step"],
-                    "previous_skill": transition_check["previous_skill"],
-                    "next_skill": transition_check["next_skill"],
-                    "failure_reason": transition_check["failure_reason"],
-                    "checked_transitions": checked_transitions,
-                },
-                "canonical_segments": canonical_segments,
-                "transition_scene_root": str(transition_scene_root),
-                "repo_id": repo_id,
-                "dataset_root": dataset_root,
-            }
+            for segment_idx in range(1, len(canonical_segments)):
+                next_segment = canonical_segments[segment_idx]
+                image_rgb = load_rgb_image(transition_files[segment_idx])
+                print("verifying skill transition...", flush=True)
+                transition_result = verifier.verify_skill_transition(
+                    next_skill=next_segment["skill"],
+                    image_rgb=image_rgb,
+                )
+                transition_check = build_transition_check(
+                    canonical_segments=canonical_segments,
+                    segment_idx=segment_idx,
+                    result=transition_result,
+                )
+                checked_transitions.append(transition_check)
+
+                if not transition_result["feasible"]:
+                    return {
+                        "source": str(source),
+                        "episode_index": episode_index,
+                        "task_index": int(task_index) if isinstance(task_index, int) else task_index,
+                        "instruction": instruction,
+                        "plan": plan,
+                        "failure_stage": "transition_validation",
+                        "plan_validation": serialized_plan_result,
+                        "transition_validation": {
+                            "failed_transition_index": transition_check["transition_index"],
+                            "failed_plan_skill_index": transition_check["plan_skill_index"],
+                            "failed_boundary_step": transition_check["boundary_step"],
+                            "previous_skill": transition_check["previous_skill"],
+                            "next_skill": transition_check["next_skill"],
+                            "failure_reason": transition_check["failure_reason"],
+                            "checked_transitions": checked_transitions,
+                        },
+                        "canonical_segments": canonical_segments,
+                        "transition_scene_root": str(transition_scene_root),
+                        "repo_id": repo_id,
+                        "dataset_root": dataset_root,
+                    }
+
+        except Exception as exc:
+            if attempt < max_retries:
+                print(
+                    f"transition validation retry {attempt}/{max_retries - 1} for episode {episode_index} after error: {exc}",
+                    flush=True,
+                )
+                continue
+            else:
+                break
 
     return None
 

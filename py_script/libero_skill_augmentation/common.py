@@ -71,6 +71,8 @@ Notes:
 - PICKUP_FROM is only for movable objects such as mugs, bowls, and pots that can be picked up and placed.
 - Prefer OPEN/CLOSE for drawers or doors when the object is being opened or closed.
 - Prefer PLACE_ON for support surfaces and PLACE_IN for containment.
+- Only use OPEN if the object is currently closed.
+- Only use CLOSE if the object is currently open.
 """
 
 SKILL_EXPR_RE = re.compile(r"^([A-Z_]+)\((.*)\)$")
