@@ -16,6 +16,7 @@ class SceneObject:
     object_type: str    # Corresponding to object type in PDDL
     object_id: str      # Corresponding to object id in PDDL
     appearance: str     # LLM text description of object
+    location: str       # LLM text description of object location
                         # TODO: 3d location
     grounding = None
 
@@ -24,6 +25,7 @@ class SceneObject:
             'type': self.object_type,
             'id': self.object_id,
             'appearance': self.appearance,
+            'location': self.location,
         }
         if include_grounding and self.grounding is not None:
             res['grounding'] = self.grounding.to_dict()
@@ -95,16 +97,21 @@ class TaskSceneGraph:
     Given an image, detect the relevant objects in the image, and output a
     corresponding PDDL problem file for this image. Omit the `goal` clause.
     Define each distinct object on its own line, using comments to add descriptions
-    in the following format, separated by a vertical bar:
+    strictly using the following format, separated by a vertical bar:
 
     <object appearance> | <object location>
 
     As part of the location, specify if the object is in the foreground or background.
 
+    If multiple objects are of the same type are present, include positional descriptions such as "left", "right", "front", and "back". 
+    Note that any "left", "right", "front", and "back" descriptions should be with respect to the robot's perspective, which is opposite to the image's perspective. 
+
     The robot should be called `robot_0` and have no description comment.
 
     If an object involves different articulated components, each component should be defined as a separate object.
     For example, a cabinet can have different drawers, a caddy can be divided into different compartments, and a wine rack can have different shelves.
+
+    If a "Task Instruction" is given, assume that the objects mentioned in the instruction are present in the scene, and you should attempt to match the objects to the objects in the scene.
     
     Remember not to use logical expressions in the initial state -- only use predicates.
 
@@ -143,7 +150,7 @@ class TaskSceneGraph:
                 object_type=object_type,
                 object_id=object_id,
                 appearance=appearance,
-                #location=location,
+                location=location,
             )
             self.object_data[object_id] = obj
 

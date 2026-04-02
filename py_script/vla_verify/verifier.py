@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import json
 import textwrap
 import time
+import copy
 
 import numpy as np
 
@@ -292,24 +293,39 @@ class VLAVerifier:
     You should translate the natural language manipulation skill into the closest \
     approximation of the actions in PDDL form. The manipulation skills typically follow the following format:
 
-    1) PLACE(object1, object2, preposition)
+    1) PLACE_ON(object1, object2)
+    - description: place object1 onto object2
     - object1: the object being placed
-    - object2: destination/support object
-    - preposition: relative relation (e.g., inside, on top of)
-    - likely equivalent PDDL action: place_in or place_on
+    - object2: object that will support object1
+    - likely equivalent PDDL action: place_on
 
-    2) PICK(object)
-    - object: the object being picked
+    2) PLACE_IN(object1, object2)
+    - description: place object1 into object2
+    - object1: the object being placed
+    - object2: object that will contain object1
+    - likely equivalent PDDL action: place_in
+
+    3) PICKUP_FROM(object1, object2)
+    - description: pick up object1 from object2
+    - object1: the object being picked up. This must be a movable object that can be picked up.
+    - object2: object that supports object1 originally
     - likely equivalent PDDL action: pickup_from
 
-    3) OPEN(object)
+    4) OPEN(object)
     - object: the object being opened
     - likely equivalent PDDL action: open
 
-    4) CLOSE(object)
+    5) CLOSE(object)
     - object: the object being closed
     - likely equivalent PDDL action: close
-        
+
+    6) TURN_ON(object)
+    - object: the object being turned on
+    - likely equivalent PDDL action: turn_on
+
+    7) TURN_OFF(object)
+    - object: the object being turned off
+    - likely equivalent PDDL action: turn_off
     
     Some color difference in object descriptions is allowed -- for example, the user may specify to pick up a black bowl when \
     the scene graph only has silver bowls; in this case the silver bowl should \
@@ -434,14 +450,19 @@ class VLAVerifier:
     4. The manipulation skill that the VLA claims is already completed.
 
     The skill usually looks like one of:
-    - PLACE(object1, object2, preposition)
-    - PICK(object)
+    - PLACE_IN(object1, object2)
+    - PLACE_ON(object1, object2)
+    - PICKUP_FROM(object1, object2)
     - OPEN(object)
     - CLOSE(object)
+    - TURN_ON(object)
+    - TURN_OFF(object)
 
     Use the scene graph state and the predicates as what should be true if the claimed skill is completed.
     Use the image as the primary source of truth for actual scene observation. 
     Compare the actual scene observation with the scene graph state and predicates to determine if the claimed skill is completed.
+    If "left" or "right" is mentioned in the skill, it is with respect to the robot's perspective, which is opposite to the viewer's perspective. 
+    The scene graph convention is also with respect to the robot's perspective.
 
     Return `skill_completed: true` only when the visual evidence clearly shows
     the claimed skill is already complete right now. If the image is ambiguous,
@@ -543,6 +564,8 @@ class VLAVerifier:
         step_results = []
         applied_actions = []
 
+        copy_scene_graph = copy.deepcopy(self.scene_graph)
+
         for step_idx, skill in enumerate(steps, start=1):
             print(f"[PLAN] Step {step_idx}/{len(steps)}: {skill}")
 
@@ -552,7 +575,8 @@ class VLAVerifier:
             if not result.accepted:
                 reason = result.reasoning
                 print(f"[PLAN] FAILED at step {step_idx}: {reason}")
-                self.scene_graph.reset_simulator()
+                # self.scene_graph.reset_simulator()
+                self.scene_graph = copy_scene_graph
                 return {
                     "feasible": False,
                     "failed_step": step_idx,
@@ -573,7 +597,8 @@ class VLAVerifier:
                     f"current symbolic state: {action_name}({', '.join(action_params)})"
                 )
                 print(f"[PLAN] FAILED at step {step_idx}: {reason}")
-                self.scene_graph.reset_simulator()
+                # self.scene_graph.reset_simulator()
+                self.scene_graph = copy_scene_graph
                 return {
                     "feasible": False,
                     "failed_step": step_idx,
@@ -592,7 +617,8 @@ class VLAVerifier:
         print(f"[PLAN] SUCCESS: all {len(steps)} steps are symbolically feasible.")
 
         # Restore simulator so repeated calls always start from the same baseline.
-        self.scene_graph.reset_simulator()
+        # self.scene_graph.reset_simulator()
+        self.scene_graph = copy_scene_graph
 
         return {
             "feasible": True,
