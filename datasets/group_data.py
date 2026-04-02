@@ -38,6 +38,10 @@ def get_sample(task_name, instance):
     # time, layer, batch, token, dimension
     return intermediate[:, :, 0, -1, :], target
 
+    # time, layer, batch, token, dimension
+    # But for kv cache intermediates (layer is 1, all tokens (~1000) but dimension 256 instead of 2048)
+    #return intermediate[:, :, 0, :, :], target
+
 n_samples = len(target_files)*REPEATS
 print(f"{n_samples} files to read.")
 from tqdm import tqdm

@@ -164,6 +164,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0, help="Libero simulation seed")
     parser.add_argument("--token-count", type=int, default=1, help="Number of tokens to probe from")
     args = parser.parse_args()
+    PROBE_LAYERS = [9]
 
     N_REPEATS = args.repeats
     SEED = args.seed
@@ -249,6 +250,9 @@ if __name__ == "__main__":
             prompt = prompt_from_obs(obs, task_description, skill=skill, mode='acting')
             vla_output = policy.infer(prompt)
             intermediates = policy.saved_intermediates[0][:, :, -args.token_count:, :]
+            #keys = policy.saved_kv_cache[1][PROBE_LAYERS, :, :, 0, :]
+            #values = policy.saved_kv_cache[2][PROBE_LAYERS, :, :, 0, :]
+            #intermediates = jnp.concat([keys, values], axis=0)
             actions = vla_output['actions']
 
             all_intermediates = [intermediates]
@@ -297,6 +301,9 @@ if __name__ == "__main__":
 
                     # layer, batch, token, dimension
                     intermediates = policy.saved_intermediates[0][:, :, -args.token_count:, :]
+                    #keys = policy.saved_kv_cache[1][PROBE_LAYERS, :, :, 0, :]
+                    #values = policy.saved_kv_cache[2][PROBE_LAYERS, :, :, 0, :]
+                    #intermediates = jnp.concat([keys, values], axis=0)
 
                     target_pose = get_component_transform(targets[target_idx])
                     aligned_robot_frame = RigidTransform.from_components(
