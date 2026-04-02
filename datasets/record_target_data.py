@@ -162,7 +162,7 @@ if __name__ == "__main__":
     parser.add_argument("dataset", help="dataset name (ex. libero_10)")
     parser.add_argument("--repeats", type=int, default=5, help="Number of times to run each experiment")
     parser.add_argument("--seed", type=int, default=0, help="Libero simulation seed")
-    parser.add_argument("--token-count", type=int, default=1, help="Number of tokens to probe from")
+    parser.add_argument("--token-count", type=int, default=10, help="Number of tokens to probe from")
     args = parser.parse_args()
     PROBE_LAYERS = [9]
 
