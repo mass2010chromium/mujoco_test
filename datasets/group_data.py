@@ -36,7 +36,7 @@ def get_sample(task_name, instance):
     target = np.load(data_dir / f"{task_name}_{instance}_transform.npy")
     intermediate = jnp.load(data_dir / f"{task_name}_{instance}_intermediate.npy")
     # time, layer, batch, token, dimension
-    return intermediate[:, [9], 0, -20:, :], target
+    return jnp.mean(intermediate[:, [9], 0, :, :], axis=2), target
 
     # time, layer, batch, token, dimension
     # But for kv cache intermediates (layer is 1, all tokens (~1000) but dimension 256 instead of 2048)

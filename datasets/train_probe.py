@@ -21,7 +21,7 @@ args = parser.parse_args()
 
 DATASET = args.dataset
 
-model = LinearProbeNetwork(nnx.Rngs(0))
+model = ProbeNetwork(nnx.Rngs(0))
 model.train()
 
 
@@ -29,7 +29,7 @@ schedule = optax.warmup_cosine_decay_schedule(
   init_value=0.0,
   peak_value=1e-4,
   warmup_steps=50,
-  decay_steps=40000,
+  decay_steps=20000,
   end_value=5e-6,
 )
 optimizer = nnx.Optimizer(model, optax.adam(learning_rate=schedule), wrt=nnx.Param)
@@ -57,7 +57,7 @@ print(targets.shape)
 key = jax.random.key(0)
 batch_size = 200
 i = 0
-while i < 40000:
+while i < 20000:
     key, subkey = jax.random.split(key)
     indices = jax.random.permutation(subkey, len(intermediates))
 
