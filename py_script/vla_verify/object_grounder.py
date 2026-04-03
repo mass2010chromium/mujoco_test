@@ -40,6 +40,7 @@ class ObjectGrounder:
         self.active_session_id = None
         self.video_data = None
         self.debug = debug
+        self.heuristic_warned = False
 
     def _close_session(self):
         """
@@ -130,6 +131,18 @@ class ObjectGrounder:
                     tracks = list(all_tracks.values())
                     reject = False
                     for track in tracks:
+
+                        # WARNING: inserting heuristic filter for libero tabletop tasks
+                        if not self.heuristic_warned:
+                            print("="*40)
+                            print("           WARNING!!!!!")
+                            print("SAM 3 heuristic for LIBERO is enabled!")
+                            print("="*40)
+                            self.heuristic_warned = True
+                        if box_xywh[1] < 0.2:
+                            reject = True
+                            break
+
                         other_mask = track['mask']
                         intersection = np.sum(mask * other_mask)
                         union = np.sum((mask + other_mask) != 0)

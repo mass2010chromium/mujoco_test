@@ -103,21 +103,26 @@ class TaskSceneGraph:
 
     <object appearance> | <object location>
 
-    As part of the location, specify if the object is in the foreground or background.
+    As part of the appearance, you must ALWAYS describe the color of the object.
+    Make sure to be accurate with your descriptions and disambiguate objects as much as possible.
 
     If multiple objects are of the same type are present, include positional descriptions such as "left", "right", "front", and "back". 
-    Note that any "left", "right", "front", and "back" descriptions should be with respect to the robot's perspective, which is opposite to the image's perspective. 
+    "front" should refer to objects closer to the viewer.
+
+    The description should form an english phrase, for example, "a white cup | on the left side of the table".
 
     The robot should be called `robot_0` and have no description comment.
 
     If an object involves different articulated components, each component should be defined as a separate object.
     For example, a cabinet can have different drawers, a caddy can be divided into different compartments, and a wine rack can have different shelves.
+    Additionally define the entire object as a separate pddl object, using the `part` predicate to relate them instead of the `on` or `in` predicates.
 
     If a "Task Instruction" is given, assume that the objects mentioned in the instruction are present in the scene, and you should attempt to match the objects to the objects in the scene.
     
     Remember not to use logical expressions in the initial state -- only use predicates.
 
     """)
+    #Note that any "left", "right", "front", and "back" descriptions should be with respect to the robot's perspective, which is opposite to the image's perspective. 
 
     def construct_from_pddl(self, images, raw_pddl_state, ground=True):
         print("raw_pddl_state", raw_pddl_state)
