@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import re
 import sys
-SCRIPT_DIR = Path("../py_script")
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 import cv2
 import einops
@@ -19,7 +19,7 @@ import jax.numpy as jnp
 from openpi.policies.libero_reason_dataset import LiberoSkillReasonDataset
 from openpi.training import config as _config
 
-sys.path.append(str(SCRIPT_DIR))
+sys.path.insert(0, str(SCRIPT_DIR/ ".." / "py_script"))
 from vlm_interfaces import *
 from vla_verify.scene_graph import TaskSceneGraph
 from vla_verify.verifier import VLAVerifier
@@ -33,8 +33,8 @@ llm_interface, vlm_interface = get_openrouter_interfaces()
 scene_graph = TaskSceneGraph(pddl_domain_text, vlm_interface)
 verifier = VLAVerifier(scene_graph, llm_interface)
 
-out_dir = "data"
-os.makedirs(out_dir, exist_ok=True)
+out_dir = SCRIPT_DIR / "data"
+os.makedirs(str(out_dir), exist_ok=True)
 
 def image_tensor_to_cv2(image, resolution=(512,512)):
     return cv2.resize(np.array(einops.rearrange(image, "c h w -> h w c") * 255, dtype=np.uint8), resolution, interpolation=cv2.INTER_LANCZOS4)
@@ -129,5 +129,6 @@ def process_episode(episode, episode_idx, subsample=5):
     np.save(f'{out_dir}/{episode_idx}_targets.npy', np.array(targets))
 
 for episode_idx in range(len(dataset.episode_starts)):
+    print("Processing episode", episode_idx)
     reasonings, video_frames = get_episode(episode_idx)
     process_episode((reasonings, video_frames), episode_idx)
