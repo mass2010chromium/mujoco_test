@@ -1,4 +1,4 @@
-import gzip
+    import gzip
 import json
 import os
 from pathlib import Path
@@ -12,9 +12,6 @@ import matplotlib.pyplot as plt
 import mediapy
 import numpy as np
 import scipy
-
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.80"
-import jax.numpy as jnp
 
 from openpi.policies.libero_reason_dataset import LiberoSkillReasonDataset
 from openpi.training import config as _config
@@ -50,18 +47,13 @@ def get_episode(episode_idx):
         video_frames.append(image_tensor_to_cv2(img_data))
     return reasonings, video_frames
 
-def process_episode(episode, episode_idx, subsample=5):
+def process_episode(episode, episode_idx):
     reasonings, video_frames = episode
     task = reasonings['instruction'].split(':', 1)[-1].strip()
     print(task)
-    subsample_frames = video_frames[::subsample]
-    scene_graph.read_image(subsample_frames, hint=f"The robot is trying to {task}", ground=True)
-    video_results = scene_graph.ground_video(additional_points_labels=[
-        ("robot", [[255, 90]])
-    ])
+    scene_graph.read_image(video_frames[0], hint=f"The robot is trying to {task}", ground=False)
 
     targets = []
-    target_names_and_valid = []
     for segment in reasonings['segments']:
         skill = segment['skill']
         splits = re.split('([^a-zA-Z0-9]left[^a-zA-Z0-9]|[^a-zA-Z0-9]right[^a-zA-Z0-9])', skill)
@@ -90,43 +82,21 @@ def process_episode(episode, episode_idx, subsample=5):
                 # TODO: table location is bad
         start_step = segment['start_step']
         end_step = segment['end_step']
-        
-        valid = False
-        if target is not None and target in video_results[0]:
-            valid = True
-            frame_start = start_step // subsample
-            frame_end = end_step // subsample
-            # Pad with an extra frame for interpolation, if we are not at end of sequence
-            if frame_end <= frame_start:
-                frame_end = frame_start + 1
-            if frame_end < len(video_results) - 1:
-                frame_end += 1
 
-            def box_midpoint(box):
-                return (box[0]+box[2]/2, box[1]+box[3]/2)
-            positions = []
-            frame_times = []
-            all_frame_times = np.arange(frame_start, frame_end) * 5
-            for t, r in zip(all_frame_times, video_results[frame_start:frame_end]):
-                if target in r:
-                    positions.append(box_midpoint(r[target].box_xywh))
-                    frame_times.append(t)
-    
-            if len(positions) > 0:
-                full_times = np.array(list(range(start_step, end_step)))
-                positions_interp = scipy.interpolate.interp1d(frame_times, positions, axis=0, bounds_error=False, fill_value=(positions[0], positions[-1]))(full_times)
-                targets.extend(positions_interp)
-            else:
-                valid = False
-        if not valid:
-            targets.extend([[0, 0]]*(end_step - start_step))
-        target_names_and_valid.extend([[target, valid]] * (end_step - start_step))
+        if target in scene_graph.object_data:
+            target_object = scene_graph.object_data[target]
+            target_info = target_object.to_dict(include_grounding=False)
+            result = scene_graph.ground_openrouter(video_frames[start_step], target_object)
+            if result['status'] == 'OK':
+                target_info['image_point'] = result['position']
+        else:
+            target_info = None
+        targets.append(target_info)
         scene_graph.apply_action(pddl_action)
 
     # NOTE: This may not contain the full trace, if verification fails...
     with gzip.open(f'{out_dir}/{episode_idx}_targets.json.zip', 'wt', encoding="ascii") as zipfile:
-        json.dump(target_names_and_valid, zipfile)
-    np.save(f'{out_dir}/{episode_idx}_targets.npy', np.array(targets))
+        json.dump(targets, zipfile)
 
 for episode_idx in range(len(dataset.episode_starts)):
     print("Processing episode", episode_idx)

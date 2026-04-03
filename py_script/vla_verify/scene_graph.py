@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 import textwrap
 import time
 
@@ -6,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from llm_apis import transformers_api
-from llm_apis.response_parsing import extract_in_backticks
+from llm_apis.response_parsing import extract_in_backticks, extract_json_from_response
 
 from .pddl_parsing import setup_pddl_simulation
 from pddlsim.simulation import Simulation
@@ -47,6 +48,9 @@ class TaskSceneGraph:
             self._read_image,
             system_prompt=TaskSceneGraph.READ_IMAGE_PROMPT.format(pddl_domain=pddl_domain_desc)
         )
+        self.ground_openrouter = vlm_interface(
+            self._ground_openrouter
+        )
 
         self.debug = debug
         self._grounder = None
@@ -65,6 +69,50 @@ class TaskSceneGraph:
             traceback.print_exc()
             print("WARNING: SAM 3 not installed. Grounding is disabled")
         return self._grounder
+
+    def _ground_openrouter(self, llm_response, image_rgb, target_object: SceneObject, normalize_resolution=1024):
+        """
+        Get the (relative) pixel position of an object in the image.
+
+        Returns a dict with (up to) two fields:
+            status:     OK | NOT_FOUND
+            position:   [x, y] normalized image coords (top left is 0, 0; bottom right is 1, 1)
+        """
+        t0 = time.monotonic()
+        print(f"  [VLM] Querying VLM for grounding...")
+        user_prompt = TaskSceneGraph.GROUND_USER_TEMPLATE.format(
+            object_json=json.dumps(target_object.to_dict(include_grounding=False), indent=2)
+        )
+        yield [ transformers_api.make_message(texts=user_prompt, images=[image_rgb]) ]
+        t1 = time.monotonic()
+        print(f"  [VLM] Time elapsed: {t1 - t0}")
+
+        raw_response = llm_response['content']
+        try:
+            result = extract_json_from_response(raw_response)
+            assert (result['status'] == "OK" or result['status'] == "NOT_FOUND")
+            result['position'] = np.array(result['position'])[::-1] / normalize_resolution
+            yield result
+        except Exception as e:
+            print(f"Warning: VLM response extraction raised exception: {e}")
+            yield { "status": "NOT_FOUND" }
+    _ground_openrouter.system_prompt = textwrap.dedent("""\
+    Given an image, give the pixel position of the best match to a given object.
+
+    Return your response in the following format:
+
+    ```json
+    {
+      "status": "OK" | "NOT_FOUND",
+      "position": [pixel_row, pixel_column] (integers, leave out if not found)
+    }
+    ```
+    """)
+    GROUND_USER_TEMPLATE = textwrap.dedent("""\
+    Object:
+    {object_json}
+    """)
+
 
     def _read_image(self, llm_response, images, hint=[], ground=True):
         """
@@ -178,17 +226,21 @@ class TaskSceneGraph:
         """
         Spread the grounding to the entire video.
         """
-        def mask_to_points(mask, n_sample=4):
-            indices = np.argwhere(mask)[:, ::-1]
-            sample = np.random.choice(len(indices), n_sample, replace=False)
-            return indices[sample]
+        def mask_to_points(grounding, n_sample=4):
+            indices = np.argwhere(grounding.mask)[:, ::-1]
+            if len(indices) > 0:
+                sample = np.random.choice(len(indices), n_sample, replace=False)
+                return indices[sample]
+            else:
+                middle = (grounding.box[:2] + grounding.box[2:]) / 2
+                return np.array([middle])
 
         point_requests = []
         obj_order = []
         for obj_id, obj in self.object_data.items():
             if obj.grounding is None:
                 continue
-            points_abs = mask_to_points(obj.grounding.mask)
+            points_abs = mask_to_points(obj.grounding)
             obj_order.append(obj_id)
             point_requests.append((len(point_requests), points_abs))
 

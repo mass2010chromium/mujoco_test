@@ -29,7 +29,7 @@ import numpy as np
 import re
 from pddlsim.simulation import Simulation
 
-from llm_apis.llm_tool import extract_json_from_response
+from llm_apis.response_parsing import extract_json_from_response
 from llm_apis import transformers_api
 
 from .scene_graph import TaskSceneGraph
