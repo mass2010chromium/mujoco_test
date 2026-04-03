@@ -1,4 +1,4 @@
-    import gzip
+import gzip
 import json
 import os
 from pathlib import Path
@@ -98,7 +98,19 @@ def process_episode(episode, episode_idx):
     with gzip.open(f'{out_dir}/{episode_idx}_targets.json.zip', 'wt', encoding="ascii") as zipfile:
         json.dump(targets, zipfile)
 
-for episode_idx in range(len(dataset.episode_starts)):
+split_num = int(sys.argv[1])
+with open(SCRIPT_DIR/"splits.json", 'r') as splits_file:
+    splits = json.load(splits_file)
+
+split_start = splits[split_num]
+if split_num == len(splits) - 1:
+    split_end = len(dataset.episode_starts)
+else:
+    split_end = splits[split_num + 1]
+
+print(f"Split {split_num} ({split_start} - {split_end})")
+from tqdm import tqdm
+for episode_idx in tqdm(range(split_start, split_end)):
     print("Processing episode", episode_idx)
     reasonings, video_frames = get_episode(episode_idx)
     process_episode((reasonings, video_frames), episode_idx)
