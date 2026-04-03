@@ -23,7 +23,7 @@ sys.path.insert(0, str(SCRIPT_DIR/ ".." / "py_script"))
 from vlm_interfaces import *
 from vla_verify.scene_graph import TaskSceneGraph
 from vla_verify.verifier import VLAVerifier
-PDDL_PATH = SCRIPT_DIR / "pddl" / "pick_place_domain.pddl"
+PDDL_PATH = SCRIPT_DIR / ".." / "py_script" / "pddl" / "libero_domain.pddl"
 pddl_domain_text = open(PDDL_PATH).read()
 
 data_config = _config.get_config('pi05_libero_skill_reason_fixed')
