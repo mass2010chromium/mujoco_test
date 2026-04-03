@@ -36,7 +36,7 @@ class TaskSceneGraph:
     Scene graph grounded to an image and a PDDL representation.
     """
     DUMMY_PDDL_GOAL = "(:goal (free {robot}))"
-    def __init__(self, pddl_domain_desc: str, vlm_interface, gpus_to_use=[0]):
+    def __init__(self, pddl_domain_desc: str, vlm_interface, gpus_to_use=[0], debug=True):
         self.pddl_domain_desc = pddl_domain_desc
         self.domain = None
         self.init_state = None
@@ -48,8 +48,10 @@ class TaskSceneGraph:
             system_prompt=TaskSceneGraph.READ_IMAGE_PROMPT.format(pddl_domain=pddl_domain_desc)
         )
 
+        self.debug = debug
         self._grounder = None
-        self._grounder_args = [gpus_to_use]
+        # NOTE: debug is functionally immutable
+        self._grounder_args = [gpus_to_use, self.debug]
         self.raw_pddl_state = None
 
     @property
@@ -223,7 +225,7 @@ class TaskSceneGraph:
         """
         for action in self.simulator.get_grounded_actions():
             if action.name.value != action_name:
-                    continue
+                continue
             params = [obj.value for obj in action.grounding]
             if params == action_params:
                 return action

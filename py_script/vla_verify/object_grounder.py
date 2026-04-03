@@ -32,13 +32,14 @@ class GroundingResult:
 
 
 class ObjectGrounder:
-    def __init__(self, gpus_to_use=[0]):
+    def __init__(self, gpus_to_use=[0], debug=True):
         sam3_root = os.path.join(os.path.dirname(sam3.__file__), "..")
         self.predictor = build_sam3_video_predictor(gpus_to_use=gpus_to_use, checkpoint_path=os.path.join(sam3_root, 'weights', 'sam3.pt'))
-        self.clip_model = AutoModel.from_pretrained("google/siglip-so400m-patch14-384")
+        self.clip_model = AutoModel.from_pretrained("google/siglip-so400m-patch14-384").to('cuda')
         self.clip_processor = AutoProcessor.from_pretrained("google/siglip-so400m-patch14-384")
         self.active_session_id = None
         self.video_data = None
+        self.debug = debug
 
     def _close_session(self):
         """
@@ -167,7 +168,7 @@ class ObjectGrounder:
             self.predictor.model.new_det_thresh = save_new_det_threshold
 
     def predict_masks_video(self, video_data: List[Image],
-            classes: List[str], objects: List[str], use_clip=False) -> List[GroundingResult]:
+            classes: List[str], objects: List[str], use_clip=False, debug=None) -> List[GroundingResult]:
         """
         Predict initial masks from video data.
 
@@ -175,6 +176,9 @@ class ObjectGrounder:
         @param classes:     Prompts for SAM, to generate detections
         @param objects:     Prompts for CLIP (appearance only, no location)
         """
+        if debug is None:
+            debug = self.debug
+
         print("Grounding objects:")
         for i, cls in enumerate(classes):
             print(i, cls)
@@ -210,8 +214,9 @@ class ObjectGrounder:
             with torch.no_grad():
                 # NOTE: CLIP is run for every mask individually, instead of batched.
                 # Can we increase speed if they are all batched together?
+                print("Running CLIP...")
                 all_images = [track['crop'] for track in tracks]
-                inputs = self.clip_processor(text=objects, images=all_images, padding="max_length", return_tensors="pt")
+                inputs = self.clip_processor(text=objects, images=all_images, padding="max_length", return_tensors="pt").to('cuda')
                 outputs = self.clip_model(**inputs)
                 logits_per_image = outputs.logits_per_image
                 clip_scores = torch.sigmoid(logits_per_image) # these are the probabilities
@@ -234,24 +239,25 @@ class ObjectGrounder:
         matching = dict(x if (type(x[0]) == int) else x[::-1] for x in matching)
         print("Matching:", matching)
 
-        # DEBUG PLOTTING
-        output_maps = {
-            'out_boxes_xywh': [],
-            'out_probs': [],
-            'out_obj_ids': [],
-            'out_binary_masks': [],
-        }
-        for obj_id in range(len(objects)):
-            if obj_id not in matching:
-                continue
-            track_name = matching[obj_id]
-            obj = all_tracks[track_name]
-            output_maps['out_boxes_xywh'].append(obj['box_xywh'])
-            output_maps['out_probs'].append(G[obj_id][track_name]['weight'])
-            output_maps['out_obj_ids'].append(obj_id)
-            output_maps['out_binary_masks'].append(obj['mask'])
-        visualize_frame_output(0, video_data, output_maps)
-        plt.savefig('grounding_out.png')
+        if debug:
+            # DEBUG PLOTTING
+            output_maps = {
+                'out_boxes_xywh': [],
+                'out_probs': [],
+                'out_obj_ids': [],
+                'out_binary_masks': [],
+            }
+            for obj_id in range(len(objects)):
+                if obj_id not in matching:
+                    continue
+                track_name = matching[obj_id]
+                obj = all_tracks[track_name]
+                output_maps['out_boxes_xywh'].append(obj['box_xywh'])
+                output_maps['out_probs'].append(G[obj_id][track_name]['weight'])
+                output_maps['out_obj_ids'].append(obj_id)
+                output_maps['out_binary_masks'].append(obj['mask'])
+            visualize_frame_output(0, video_data, output_maps)
+            plt.savefig('grounding_out.png')
 
 
         # NOTE: no way to reject matches.
@@ -285,7 +291,10 @@ class ObjectGrounder:
         return outputs_per_frame
 
 
-    def propagate_all_detections(self, point_requests, target_frame=0):
+    def propagate_all_detections(self, point_requests, target_frame=0, debug=None):
+        if debug is None:
+            debug = self.debug
+
         # Funny: Initialize data structures...
         _ = self.predictor.handle_request(request=dict(
             type="reset_session",
@@ -351,12 +360,13 @@ class ObjectGrounder:
                 )
             results.append(frame_output)
         
-        # Debug plotting
-        DEBUG_STRIDE = 10
-        plt.close('all')
-        for i in range(0, len(raw_results), DEBUG_STRIDE):
-            visualize_frame_output(i, self.video_data, raw_results[i])
-            plt.savefig(f'grounding_out_{i}.png')
-        plt.close('all')
+        if debug:
+            # Debug plotting
+            DEBUG_STRIDE = 10
+            plt.close('all')
+            for i in range(0, len(raw_results), DEBUG_STRIDE):
+                visualize_frame_output(i, self.video_data, raw_results[i])
+                plt.savefig(f'grounding_out_{i}.png')
+            plt.close('all')
 
         return results
