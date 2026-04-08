@@ -1,11 +1,12 @@
 #!/bin/env python
 
 """
-Wrapper around srun for running python scripts.
+Wrapper around sbatch for running python scripts.
 """
 import argparse
 import json
 import os
+from pathlib import Path
 import subprocess
 import time
 
@@ -51,6 +52,7 @@ if __name__ == "__main__":
             output_filename = f'{base_filename}.{i}'
     else:
         output_filename = base_filename
+    Path(output_filename).touch()
 
     script_temp_file = os.path.join(SCRIPT_DIR, '.pace_python.sh')
 
@@ -90,27 +92,25 @@ if __name__ == "__main__":
 
     try:
         extra_procs = []
-
-        if not os.path.exists(output_filename):
-            print("Waiting for output file...", end='', flush=True)
-            while True:
-                if os.path.exists(output_filename):
-                    success = False
-                    with open(output_filename, 'r') as file:
-                        lines_read = 0
-                        for line in file:
-                            if line.startswith("Running on nodes:"):
-                                node_name = line.split(':', 1)[1].strip()
-                                success = True
-                                break
-                            lines_read += 1
-                            if lines_read > 20: # It should appear on exactly the 10th line
-                                break
-                    if success:
-                        break
-                print(".", end='', flush=True)
-                time.sleep(1)
-            print()
+        print("Waiting for out...", end='', flush=True)
+        while True:
+            if os.path.exists(output_filename):
+                success = False
+                with open(output_filename, 'r') as file:
+                    lines_read = 0
+                    for line in file:
+                        if line.startswith("Running on nodes:"):
+                            node_name = line.split(':', 1)[1].strip()
+                            success = True
+                            break
+                        lines_read += 1
+                        if lines_read > 20: # It should appear on exactly the 10th line
+                            break
+                if success:
+                    break
+            print(".", end='', flush=True)
+            time.sleep(1)
+        print()
 
         if args.tunnel_port is not None:
             ssh_logfile = open(f'{output_filename}.ssh', 'w')
