@@ -188,6 +188,7 @@ class TaskSceneGraph:
     If a "Task Instruction" is given, assume that the objects mentioned in the instruction are present in the scene, and you should attempt to match the objects to the objects in the scene.
     
     Remember not to use logical expressions in the initial state -- only use predicates.
+    Take extra care when specifying relationships between objects -- references to objects match the object IDs exactly, or else it will cause an error.
 
     """)
     #Note that any "left", "right", "front", and "back" descriptions should be with respect to the robot's perspective, which is opposite to the image's perspective. 
