@@ -238,7 +238,7 @@ class VLAVerifier:
         avail_actions = json.dumps(self.scene_graph.get_available_actions(), indent=2)
 
         user_prompt = VLAVerifier.SKILL_TRANSLATOR_USER_TEMPLATE.format(
-            scene_graph_json=json.dumps(scene_graph.to_dict(include_grounding=False), indent=2),
+            scene_graph_pddl=scene_graph.pddl_summary(),
             skill=skill,
             avail_actions=avail_actions
         )
@@ -327,12 +327,11 @@ class VLAVerifier:
     - object: the object being turned off
     - likely equivalent PDDL action: turn_off
     
-    Some color difference in object descriptions is allowed -- for example, the user may specify to pick up a black bowl when \
-    the scene graph only has silver bowls; in this case the silver bowl should \
-    be chosen. You should be lenient with shades of color, \
-    (accepting silver as white or silver as black, for example),
-    but you should reject translations that have different hues (red vs blue) \
-    or large differences in shade (white vs black).
+    Color difference in object descriptions is allowed -- for example, if the user \
+    specifies a black bowl, you may match it with a bowl described as a different shade, \
+    such as silver or grey. You should reject translations that have different hues \
+    (red vs blue) or large differences in shade (white vs black). Prioritize matching \
+    an action over satisfying color exactly.
 
     If the natural language task has errors such as garbled text or other nonsense, \
     you should reject the action.
@@ -352,8 +351,8 @@ class VLAVerifier:
     """)
 
     SKILL_TRANSLATOR_USER_TEMPLATE = textwrap.dedent("""\
-    Scene Graph:
-    {scene_graph_json}
+    Scene Graph state:
+    {scene_graph_pddl}
 
     skill to translate: "{skill}"
 

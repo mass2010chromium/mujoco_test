@@ -11,7 +11,9 @@ def get_openrouter_interfaces():
     print("Using OpenRouter")
     # VLM_MODEL = "google/gemini-2.5-pro"
     # LLM_MODEL = "google/gemini-2.5-flash"
-    VLM_MODEL = "google/gemini-3.1-pro-preview"
+    # VLM_MODEL = "google/gemini-3.1-pro-preview"
+    # LLM_MODEL = "google/gemini-3-flash-preview"
+    VLM_MODEL = "google/gemini-3-flash-preview"
     LLM_MODEL = "google/gemini-3-flash-preview"
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -36,8 +38,8 @@ def get_ollama_interfaces():
     print("Using Ollama")
 
     base_url = "http://localhost:11434"
-    VLM_MODEL = "gemma3:27b"
-    LLM_MODEL = "gemma3:27b"
+    VLM_MODEL = "gemma4:latest"
+    LLM_MODEL = "gemma4:latest"
     context_length = 2400
 
     if requests.get(base_url).status_code == 200:

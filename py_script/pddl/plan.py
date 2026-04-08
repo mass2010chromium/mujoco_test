@@ -3,6 +3,8 @@ Partially ripped from tutorial: https://github.com/galk-research/pddlsim/wiki/Tu
 
 Requires: `uv pip install pddlsim`
 """
+import textwrap
+
 from pddlsim.parser import parse_domain, parse_problem
 from pddlsim.simulation import Simulation
 
@@ -19,10 +21,16 @@ print(repr(problem.raw_problem.goals_section))
 print(simulator)
 #while not simulator.is_solved():
 while True:
+    print("(:objects")
+    print(textwrap.indent('\n'.join(repr(s) for s in simulator.problem.objects_section), "  "))
+    print(")")
+    print("(:state")
+    print(textwrap.indent('\n'.join(repr(s) for s in simulator.state), "  "))
+    print(")")
     actions = list(simulator.get_grounded_actions())
     print("Actions:")
     for i, action in enumerate(actions):
-        print(i, action.__dict__)
+        print(i, action)
     i = input("Pick an action by entering a number: ")
     try:
         i = int(i)

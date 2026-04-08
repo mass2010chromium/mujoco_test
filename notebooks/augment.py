@@ -51,9 +51,18 @@ def process_episode(episode, episode_idx):
     reasonings, video_frames = episode
     task = reasonings['instruction'].split(':', 1)[-1].strip()
     print(task)
-    scene_graph.read_image(video_frames[0], hint=f"The robot is trying to {task}", ground=False)
+    fname = f"{out_dir}/{episode_idx}_targets.json.zip"
 
     targets = []
+    for i in range(3):
+        success = scene_graph.read_image(video_frames[0], hint=f"The robot is trying to {task}", ground=False)
+        if success:
+            break
+    if not success:
+        with gzip.open(fname, 'wt', encoding="ascii") as zipfile:
+            json.dump(targets, zipfile)
+        return
+
     for segment in reasonings['segments']:
         skill = segment['skill']
         splits = re.split('([^a-zA-Z0-9]left[^a-zA-Z0-9]|[^a-zA-Z0-9]right[^a-zA-Z0-9])', skill)
@@ -75,42 +84,64 @@ def process_episode(episode, episode_idx):
             break
         target = None
         match pddl_action.name.value:
-            case "pickup_from" | "open" | "place_in" | "turn_on" | "turn_off":
+            case "pickup_from" | "open" | "close" | "turn_on" | "turn_off":
                 target = pddl_action.grounding[0].value
-            case "place_on":
+            case "place_on" | "place_in" :
                 target = pddl_action.grounding[2].value
                 # TODO: table location is bad
         start_step = segment['start_step']
         end_step = segment['end_step']
 
         if target in scene_graph.object_data:
+            print(f"Grounding object {target}")
             target_object = scene_graph.object_data[target]
             target_info = target_object.to_dict(include_grounding=False)
             result = scene_graph.ground_openrouter(video_frames[start_step], target_object)
+            print("Grounding result:", result)
             if result['status'] == 'OK':
-                target_info['image_point'] = result['position']
+                target_info['image_point'] = result['position'].tolist()
         else:
+            print(f"Object {target} not found in scene graph!")
             target_info = None
         targets.append(target_info)
-        scene_graph.apply_action(pddl_action)
+        if segment != reasonings['segments'][-1]:
+            scene_graph.apply_action(pddl_action, new_image=video_frames[end_step-1])
+            print("After action:")
+            print(scene_graph.pddl_summary())
 
     # NOTE: This may not contain the full trace, if verification fails...
-    with gzip.open(f'{out_dir}/{episode_idx}_targets.json.zip', 'wt', encoding="ascii") as zipfile:
+    with gzip.open(fname, 'wt', encoding="ascii") as zipfile:
         json.dump(targets, zipfile)
 
 split_num = int(sys.argv[1])
-with open(SCRIPT_DIR/"splits.json", 'r') as splits_file:
-    splits = json.load(splits_file)
+import json
+with open("missing_splits.json", "r") as split_file:
+    missing = json.load(split_file)[split_num]
 
-split_start = splits[split_num]
-if split_num == len(splits) - 1:
-    split_end = len(dataset.episode_starts)
-else:
-    split_end = splits[split_num + 1]
+resume_start = 0
+if len(sys.argv) > 2:
+    resume_start = int(sys.argv[2])
+    print("Resuming from iteration", resume_start)
+# 
+# with open(SCRIPT_DIR/"splits.json", 'r') as splits_file:
+#     splits = json.load(splits_file)
+# 
+# split_start = splits[split_num]
+# if split_num == len(splits) - 1:
+#     split_end = len(dataset.episode_starts)
+# else:
+#     split_end = splits[split_num + 1]
+# 
+# print(f"Split {split_num} ({split_start} - {split_end})")
 
-print(f"Split {split_num} ({split_start} - {split_end})")
 from tqdm import tqdm
-for episode_idx in tqdm(range(split_start, split_end)):
+#for episode_idx in tqdm(range(split_start, split_end)):
+    #if (episode_idx - split_start) < resume_start:
+    #    continue
+for i in tqdm(range(len(missing))):
+    if i < resume_start:
+        continue
+    episode_idx = missing[i]
     print("Processing episode", episode_idx)
     reasonings, video_frames = get_episode(episode_idx)
     process_episode((reasonings, video_frames), episode_idx)

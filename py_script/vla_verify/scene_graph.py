@@ -21,16 +21,23 @@ class SceneObject:
                         # TODO: 3d location
     grounding = None
 
-    def to_dict(self, include_grounding=True):
+    def to_dict(self, include_location=True, include_grounding=True):
         res = {
             'type': self.object_type,
             'id': self.object_id,
             'appearance': self.appearance,
-            'location': self.location,
         }
+        if include_location:
+            res['location'] = self.location,
         if include_grounding and self.grounding is not None:
             res['grounding'] = self.grounding.to_dict()
         return res
+
+    def as_pddl_string(self):
+        s = f"{self.object_id} - {self.object_type}"
+        if self.appearance is not None:
+            s += f" ; {self.appearance} | {self.location}"
+        return s
 
 class TaskSceneGraph:
     """
@@ -50,6 +57,10 @@ class TaskSceneGraph:
         )
         self.ground_openrouter = vlm_interface(
             self._ground_openrouter
+        )
+        self.update_scene_graph = vlm_interface(
+            self._update_scene_graph,
+            system_prompt=TaskSceneGraph.UPDATE_GRAPH_SYSTEM_PROMPT.format(pddl_domain=pddl_domain_desc)
         )
 
         self.debug = debug
@@ -81,6 +92,7 @@ class TaskSceneGraph:
         t0 = time.monotonic()
         print(f"  [VLM] Querying VLM for grounding...")
         user_prompt = TaskSceneGraph.GROUND_USER_TEMPLATE.format(
+            scene_graph_pddl=self.pddl_summary(),
             object_json=json.dumps(target_object.to_dict(include_grounding=False), indent=2)
         )
         yield [ transformers_api.make_message(texts=user_prompt, images=[image_rgb]) ]
@@ -98,17 +110,23 @@ class TaskSceneGraph:
             yield { "status": "NOT_FOUND" }
     _ground_openrouter.system_prompt = textwrap.dedent("""\
     Given an image, give the pixel position of the best match to a given object.
+    
+    As help, a scene graph has been constructed out containing the known objects in the image.
 
     Return your response in the following format:
 
     ```json
     {
       "status": "OK" | "NOT_FOUND",
+      "reasoning": <natural language explanation>,
       "position": [pixel_row, pixel_column] (integers, leave out if not found)
     }
     ```
     """)
     GROUND_USER_TEMPLATE = textwrap.dedent("""\
+    Current scene state:
+    {scene_graph_pddl}
+
     Object:
     {object_json}
     """)
@@ -131,7 +149,9 @@ class TaskSceneGraph:
 
         # Strip triple backticks
         raw_response = llm_response['content']
-        response = extract_in_backticks(raw_response, 'pddl')
+        # One time for some bizzare reason I saw gemini output ```lisp instead of ```pddl.
+        # So let's be maximally permissive and accept ```([^\s]*)
+        response = extract_in_backticks(raw_response, r"[^\s]*")
         if response is None:
             print("Warning: No triple backticks given")
             response = raw_response
@@ -183,7 +203,7 @@ class TaskSceneGraph:
             traceback.print_exc()
             print("PDDL Parse Error!")
             print(raw_pddl_state)
-            return
+            return False
         lines = raw_pddl_state.split('\n')
 
         # These two are used for grounding.
@@ -220,6 +240,7 @@ class TaskSceneGraph:
             mask_results = self.grounder.predict_masks_video(video_data, full_descriptions, label_descriptions, use_clip=True)
             for object_id, result in zip(object_ids, mask_results):
                 self.object_data[object_id].grounding = result
+        return True
 
 
     def ground_video(self, additional_points_labels=[]):
@@ -269,11 +290,87 @@ class TaskSceneGraph:
         ]
     
 
-    def apply_action(self, action):
+    def apply_action(self, action, new_image=None):
         """
         Apply an action to the simulator. Return True if successful, False otherwise.
         """
+        if new_image is not None:
+            self.update_scene_graph(str(action), new_image)
         return self.simulator.apply_grounded_action(action)
+
+    def _update_scene_graph(self, llm_response, action_str, new_image):
+        user_text = TaskSceneGraph.UPDATE_GRAPH_USER_TEMPLATE.format(
+            pddl_scene=self.pddl_summary(),
+            pddl_action=action_str
+        )
+        t0 = time.monotonic()
+        print(f"  [VLM] Querying VLM for scene graph update...")
+        yield [ transformers_api.make_message(texts=user_text, images=[new_image]) ]
+        t1 = time.monotonic()
+        print(f"  [VLM] Time elapsed: {t1 - t0}")
+        raw_response = llm_response['content']
+        try:
+            results = extract_json_from_response(raw_response)
+            for result in results:
+                obj = self.object_data[result['object_id']]
+                obj.appearance = result['appearance']
+                obj.location = result['location']
+            
+        except Exception as e:
+            print(f"Warning: VLM response extraction raised exception: {e}")
+        yield None
+
+    UPDATE_GRAPH_SYSTEM_PROMPT = textwrap.dedent("""\
+    The following is a PDDL domain description for a generic pick and place task:
+
+    ```pddl
+    {pddl_domain}
+    ```
+
+    Given an image of the world, a description of the prior state, and the previous \
+    action taken by the robot, update the appearance and location descriptions for \
+    objects in the scene.
+
+    Object descriptions in the scene description are formatted as PDDL comments:
+    <object id> - <object PDDL type> ; <object appearance> | <object location>
+
+    For example, if the action is `(pickup_from bowl0 robot table)`, you know that \
+    bowl0 is the object of interest, and that it should be gripped by the robot. \
+
+    You should cross reference this against the given image -- for example, if the \
+    action is `(place_on bowl0 robot table)`, the PDDL action does not specify where \
+    the bowl was placed, so you should describe the location by looking at the image.
+
+    Format your descriptions as two parts of a sentence. For example:
+
+    ```json
+    {{
+      "appearance": "a white bowl",
+      "location": "on the left side of the table"
+    }}
+    ```
+
+    Return your response as a list of changed descriptions. Return an empty list if \
+    nothing changed.
+    ```json
+    [
+      {{
+        "object_id": <object id of the target object>
+        "appearance": <description of the object's appearance>
+        "location": <description of the object's new location.>
+      }}
+      ...
+    ]
+    ```
+
+    """)
+    UPDATE_GRAPH_USER_TEMPLATE = textwrap.dedent("""\
+    Previous scene state:
+    {pddl_scene}
+
+    Action taken:
+    {pddl_action}
+    """)
 
 
     def match_grounded_action(self, action_name: str, action_params: list[str]):
@@ -298,7 +395,7 @@ class TaskSceneGraph:
         )
 
 
-    def to_dict(self, include_grounding=False):
+    def to_dict(self, include_location=True, include_grounding=False):
         """Machine readable summary of scene graph objects"""
         all_predicates = list(self.simulator.state)
         edges = []
@@ -312,7 +409,7 @@ class TaskSceneGraph:
                 edges.append((name, *targets))
         node_data = []
         for obj in self.object_data.values():
-            data = obj.to_dict()
+            data = obj.to_dict(include_location=include_location, include_grounding=include_grounding)
             data['attributes'] = attrs[obj.object_id]
             node_data.append(data)
         return {
@@ -327,11 +424,22 @@ class TaskSceneGraph:
             ]
         }
 
-    def summary(self) -> str:
-        """Human-readable summary of the scene graph state."""
-        info = self.to_dict()
+    def pddl_summary(self) -> str:
+        lines = []
+        lines.append("(:objects")
+        lines.append(textwrap.indent('\n'.join(o.as_pddl_string() for o in self.object_data.values()), "  "))
+        lines.append(")\n(:state")
+        lines.append(textwrap.indent('\n'.join(repr(s) for s in self.simulator.state), "  "))
+        lines.append(")")
+        return '\n'.join(lines)
 
-        lines = ["=== Scene Graph State ==="]
+    def summary(self, *args, header=True, **kwargs) -> str:
+        """Human-readable summary of the scene graph state."""
+        info = self.to_dict(*args, **kwargs)
+
+        lines = []
+        if header:
+            lines.append("=== Scene Graph State ===")
         lines.append(f"Nodes ({len(info['nodes'])}):")
         for data in info['nodes']:
             attr_str = (
