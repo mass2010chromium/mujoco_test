@@ -12,7 +12,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "$BASH_SOURCE[0]")/" && pwd)
 POSITIONAL_ARGS=()
 
 # PACE argument only -- TACC is homogenous
-GPU_NAME=rtx_6000
+GPU_NAME=nvidia_gh200_120gb
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -45,14 +45,15 @@ source ~/.local/bin/env
 
 # 2. Install all py packages
 which sbatch > /dev/null
+
 if [[ $? -eq 0 ]]; then
-	# 2.1a. IF slurm exists, populate node lists.
-	cd slurm_utils
-	bash sinfo.sh
-	python extract_nodes.py
-	cd ../../
-	
-	# 2.2a. Run install scripts using slurm
+    # 2.1a. IF slurm exists, populate node lists.
+    cd slurm_utils
+    bash sinfo.sh
+    python3 extract_nodes.py
+    cd ../../
+
+    # 2.2a. Run install scripts using slurm
     echo "Found sbatch, running install with sbatch"
     # PACE run
     export CUDA_MODULE="12.9.1"

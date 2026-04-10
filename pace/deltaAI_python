@@ -15,16 +15,23 @@ if __name__ == "__main__":
     VENV_LOC = os.path.join(
         'mujoco_playground', '.venv', 'bin', 'activate'
     )
+    PARTITION_FILE = os.path.join(SCRIPT_DIR, 'partitions.json')
 
     parser = argparse.ArgumentParser(
-        prog='tacc_python',
+        prog='deltaAI_python',
         description='Launch python using SLURM with the preconfigured virtualenv and GPUs.',
         usage='%(prog)s [options] [args]',
         epilog='Additional arguments are interpreted as either arguments to `python`, or `bash` (if --no-python is passed).'
     )
     parser.add_argument('--clean-logs', action='store_true', help='Set to remove logfiles in this directory before running. Does not submit a job if no extra args passed.')
-    parser.add_argument('--job-name', '-J', default='tacc_python', help='Name of the slurm job.')
-    parser.add_argument('--partition', default="gh", help="The partition to run on. gh for gpu, gg for cpu only")
+    parser.add_argument('--job-name', '-J', default='deltaAI_python', help='Name of the slurm job.')
+    parser.add_argument('--nodefile', '-F', help='File containing list of eligible nodes to run on. Automatically created as `nodes_<gpu>.txt` if left blank.')
+    parser.add_argument('--cpus', default=2, type=int, help='Number of CPU cores desired.')
+    parser.add_argument('--mem', default='32G', help='Amount of (CPU) memory desired. Use suffix K|M|G|T')
+    parser.add_argument('--gpus', '-G', default='nvidia_gh200_120gb', help='GPU to request for the job.')
+    parser.add_argument('--gpus-per-node', default=1, type=int, help='Number of GPUs to request')
+    parser.add_argument('--no-gpu', action='store_true', help="Don't use a GPU for this job.")
+    parser.add_argument('--partition', default=None, help="Override the partition to run on")
     parser.add_argument('--time', default='60', help='Amount of time (in minutes) to allocate for this job.')
     parser.add_argument('--no-python', action='store_true', help="Don't launch python. Still useful if you want the virtualenv, or have your own ex. shell script you want to run in this environment. Extra arguments are interpreted as bash arguments.")
     parser.add_argument('--tunnel-port', default=None, help="Tunnel a port to the node running the python process.")
@@ -36,6 +43,18 @@ if __name__ == "__main__":
         print(f"Could not find VENV at relative path: {VENV_LOC}")
         print("This script must be run from repository toplevel")
         exit(1)
+
+    if not os.path.exists(PARTITION_FILE):
+        print("Could not find partitions definition file.")
+        print(f"Generate one by running: bash -c 'cd {SCRIPT_DIR}/slurm_utils; python extract_nodes.py'")
+        exit(1)
+
+    with open(PARTITION_FILE, 'r') as partition_file:
+        partition_info = json.load(partition_file)
+
+    nodefile = args.nodefile
+    if args.nodefile is None:
+        nodefile = os.path.join(SCRIPT_DIR, f'nodes_{args.gpus.split(":")[0]}.txt')
 
     if args.clean_logs:
         os.system('rm -f sbatch_python.log')
@@ -54,7 +73,7 @@ if __name__ == "__main__":
         output_filename = base_filename
     Path(output_filename).touch()
 
-    script_temp_file = os.path.join(SCRIPT_DIR, '.tacc_python.sh')
+    script_temp_file = os.path.join(SCRIPT_DIR, '.deltaAI_python.sh')
 
     with open(script_temp_file, 'w') as script_file:
         if args.no_python:
@@ -63,9 +82,8 @@ if __name__ == "__main__":
             exec_line = 'python $@'
 
         script_file.write(
-            f'#!/bin/env bash\n'
+            f'#!/usr/bin/env bash\n'
             f'echo "Running on nodes: $SLURM_NODELIST"\n'
-			f'module load cuda/12.6\n'
             f'source {VENV_LOC}\n'
             f'source {args.env_file}\n'
             f'{exec_line}\n'
@@ -74,10 +92,24 @@ if __name__ == "__main__":
     cmd_args = [
         '-J', args.job_name,
         '-t', args.time,
+        '-c', str(args.cpus),
         '-N', '1',
+        '--mem', args.mem,
         '-o', output_filename,
     ]
-    cmd_args += [ '--partition', args.partition ]
+    if not args.no_gpu:
+        if args.partition is not None:
+            partition = args.partition
+        else:
+            partition = partition_info[args.gpus.split(':')[0]]
+        cmd_args += [
+            '-G', args.gpus,
+            '-F', nodefile,
+            #'--gpus-per-node', str(args.gpus_per_node),
+            '--partition', partition
+        ]
+    elif args.partition is not None:
+        cmd_args += [ '--partition', args.partition ]
     res = subprocess.run(['sbatch'] + cmd_args + [script_temp_file] + rest, capture_output=True, text=True)
 
     if res.returncode != 0:
@@ -92,7 +124,7 @@ if __name__ == "__main__":
 
     try:
         extra_procs = []
-        print("Waiting for out...", end='', flush=True)
+        print("Waiting for output...", end='', flush=True)
         while True:
             if os.path.exists(output_filename):
                 success = False

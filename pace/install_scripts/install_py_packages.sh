@@ -1,4 +1,4 @@
-#! /bin/env bash
+#! /usr/bin/env bash
 #SBATCH -J InstallMujoco
 #SBATCH -N1 --ntasks-per-node=1 --cpus-per-task=4
 
@@ -8,7 +8,7 @@ module load cuda/$CUDA_MODULE || echo "module load failed, OK if running locally
 
 ### BEGIN Mujoco install
 cd mujoco_playground
-uv venv --python 3.12
+uv venv --python 3.12.12
 source .venv/bin/activate
 
 # Jax versions >=0.6.0 will not work, since some API's were deprecated and removed. Until this library is updated, use any version before 0.6.0 -- Madrona

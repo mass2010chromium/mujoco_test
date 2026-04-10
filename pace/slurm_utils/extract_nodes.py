@@ -1,4 +1,4 @@
-#!/bin/env python
+#!/usr/bin/env python3
 """
 Parse a dumped sinfo log file and extract all the GPUs and their corresponding computers on this slurm system.
 """

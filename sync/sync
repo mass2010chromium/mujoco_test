@@ -1,10 +1,10 @@
-#!/bin/env python3
+#!/usr/bin/env python3
 
 import os
 import pathlib
 import shutil
 
-SYNC_ROOT = "/mnt/mujoco-data/"
+SYNC_ROOT = os.environ['SYNC_ROOT']
 
 def is_dir_empty(path):
     if not os.path.exists(path):
@@ -128,7 +128,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cur_path = pathlib.Path(os.path.abspath(args.target))
-    mod_path = pathlib.Path(SYNC_ROOT)/ os.path.join(*cur_path.parts[2:])
+    mod_path = pathlib.Path(SYNC_ROOT)/ os.path.join(*cur_path.parts[3:])
+    print(cur_path)
+    print(mod_path)
 
     # Handle local path being nonexistent
     if not os.path.exists(cur_path):

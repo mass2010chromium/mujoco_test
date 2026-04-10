@@ -1,3 +1,4 @@
 nodes*.txt
 .pace_python.sh
-openpi
+.deltaAI_python.sh
+.tacc_python.sh
