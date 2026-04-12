@@ -81,7 +81,7 @@ class TaskSceneGraph:
             print("WARNING: SAM 3 not installed. Grounding is disabled")
         return self._grounder
 
-    def _ground_openrouter(self, llm_response, image_rgb, target_object: SceneObject, normalize_resolution=1024):
+    def _ground_openrouter(self, llm_response, image_rgb, target_object: SceneObject, task_hint=None, normalize_resolution=1024):
         """
         Get the (relative) pixel position of an object in the image.
 
@@ -93,7 +93,8 @@ class TaskSceneGraph:
         print(f"  [VLM] Querying VLM for grounding...")
         user_prompt = TaskSceneGraph.GROUND_USER_TEMPLATE.format(
             scene_graph_pddl=self.pddl_summary(),
-            object_json=json.dumps(target_object.to_dict(include_grounding=False), indent=2)
+            object_json=json.dumps(target_object.to_dict(include_grounding=False), indent=2),
+            task_hint=task_hint
         )
         yield [ transformers_api.make_message(texts=user_prompt, images=[image_rgb]) ]
         t1 = time.monotonic()
@@ -109,9 +110,44 @@ class TaskSceneGraph:
             print(f"Warning: VLM response extraction raised exception: {e}")
             yield { "status": "NOT_FOUND" }
     _ground_openrouter.system_prompt = textwrap.dedent("""\
-    Given an image, give the pixel position of the best match to a given object.
+    Given an image, give the pixel position of the best match to a given target.
+
+    The target is given as an object, and you might also get a task hint as to where specifically on the target \
+    you should be selecting. For example, you might be told to find the position of the table, but the task says \
+    PLACE(box, to the right of the can). In this case you should find a point on the table that is to the right \
+    of a can on the table, and select that point.
+
+    The possible task hint formats are:
+
+    1) PLACE_ON(object1, object2)
+    - description: place object1 onto object2
+    - object1: the object being placed
+    - object2: object that will support object1
+
+    2) PLACE_IN(object1, object2)
+    - description: place object1 into object2
+    - object1: the object being placed
+    - object2: object that will contain object1
+
+    3) PICKUP_FROM(object1, object2)
+    - description: pick up object1 from object2
+    - object1: the object being picked up. This must be a movable object that can be picked up.
+    - object2: object that supports object1 originally
+
+    4) OPEN(object)
+    - object: the object being opened
+
+    5) CLOSE(object)
+    - object: the object being closed
+
+    6) TURN_ON(object)
+    - object: the object being turned on
+
+    7) TURN_OFF(object)
+    - object: the object being turned off
     
     As help, a scene graph has been constructed out containing the known objects in the image.
+    The given object corresponds to one of these.
 
     Return your response in the following format:
 
@@ -129,6 +165,9 @@ class TaskSceneGraph:
 
     Object:
     {object_json}
+
+    Hint:
+    {task_hint}
     """)
 
 
@@ -186,10 +225,12 @@ class TaskSceneGraph:
     Additionally define the entire object as a separate pddl object, using the `part` predicate to relate them instead of the `on` or `in` predicates.
 
     If a "Task Instruction" is given, assume that the objects mentioned in the instruction are present in the scene, and you should attempt to match the objects to the objects in the scene.
-    
-    Remember not to use logical expressions in the initial state -- only use predicates.
-    Take extra care when specifying relationships between objects -- references to objects match the object IDs exactly, or else it will cause an error.
 
+    Additional rules:
+     - Never use logical expressions (and, or, not) when describing the initial state -- only use predicates themselves. It is not necessary to specify that something is both "open" and "not closed".
+     - Never use shorthand when specifying relationships between objects -- references to objects match the object IDs exactly. For example, never shorten "compartment" to "compart" when specifying affordances, part relationships, or state relationships (on/in).
+
+    Always output a PDDL problem file to describe the scene, omitting the goal clause.
     """)
     #Note that any "left", "right", "front", and "back" descriptions should be with respect to the robot's perspective, which is opposite to the image's perspective. 
 

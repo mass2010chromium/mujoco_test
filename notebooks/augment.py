@@ -96,7 +96,7 @@ def process_episode(episode, episode_idx):
             print(f"Grounding object {target}")
             target_object = scene_graph.object_data[target]
             target_info = target_object.to_dict(include_grounding=False)
-            result = scene_graph.ground_openrouter(video_frames[start_step], target_object)
+            result = scene_graph.ground_openrouter(video_frames[start_step], target_object, task_hint=skill)
             print("Grounding result:", result)
             if result['status'] == 'OK':
                 target_info['image_point'] = result['position'].tolist()
@@ -115,29 +115,28 @@ def process_episode(episode, episode_idx):
 
 split_num = int(sys.argv[1])
 import json
-with open("missing_splits.json", "r") as split_file:
+with open(SCRIPT_DIR/"missing_splits.json", "r") as split_file:
     missing = json.load(split_file)[split_num]
 
 resume_start = 0
 if len(sys.argv) > 2:
     resume_start = int(sys.argv[2])
     print("Resuming from iteration", resume_start)
-# 
+ 
 # with open(SCRIPT_DIR/"splits.json", 'r') as splits_file:
 #     splits = json.load(splits_file)
-# 
 # split_start = splits[split_num]
 # if split_num == len(splits) - 1:
 #     split_end = len(dataset.episode_starts)
 # else:
 #     split_end = splits[split_num + 1]
-# 
+
 # print(f"Split {split_num} ({split_start} - {split_end})")
 
 from tqdm import tqdm
 #for episode_idx in tqdm(range(split_start, split_end)):
-    #if (episode_idx - split_start) < resume_start:
-    #    continue
+#    if (episode_idx - split_start) < resume_start:
+#        continue
 for i in tqdm(range(len(missing))):
     if i < resume_start:
         continue
