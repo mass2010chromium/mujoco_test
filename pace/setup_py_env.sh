@@ -39,13 +39,17 @@ set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 # 1. Install uv package manager
 cd "$SCRIPT_DIR"
 bash install_scripts/install_uv.sh
-source ~/.local/bin/env
+# source ~/.local/bin/env
+if [[ -f "$HOME/.local/bin/env" ]]; then
+  source "$HOME/.local/bin/env"
+else
+  export PATH="$HOME/.local/bin:$PATH"
+fi
 # END install uv
 
 
 # 2. Install all py packages
 which sbatch > /dev/null
-
 if [[ $? -eq 0 ]]; then
     # 2.1a. IF slurm exists, populate node lists.
     cd slurm_utils
