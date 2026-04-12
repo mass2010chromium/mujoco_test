@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+
+"""
+Wrapper around sbatch for running python scripts on ANVIL.
+"""
+import argparse
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import time
+
+if __name__ == "__main__":
+    script_path = Path(__file__).resolve()
+    SCRIPT_DIR = script_path.parent
+    REPO_ROOT = SCRIPT_DIR.parent
+    VENV_LOC = REPO_ROOT / "mujoco_playground" / ".venv" / "bin" / "activate"
+
+    parser = argparse.ArgumentParser(
+        prog='anvil_python',
+        description='Launch python using SLURM with the preconfigured virtualenv and GPUs.',
+        usage='%(prog)s [options] [args]',
+        epilog='Additional arguments are interpreted as either arguments to `python`, or `bash` (if --no-python is passed).'
+    )
+    parser.add_argument('--clean-logs', action='store_true', help='Set to remove logfiles in this directory before running. Does not submit a job if no extra args passed.')
+    parser.add_argument('--job-name', '-J', default='anvil_python', help='Name of the slurm job.')
+    parser.add_argument('--account', '-A', default=None, help='Slurm account to charge the job to, e.g. cis260502-ai.')
+    parser.add_argument('--partition', default="ai", help="The partition to run on. gh for gpu, gg for cpu only")
+    parser.add_argument('--time', default='60', help='Amount of time (in minutes) to allocate for this job.')
+    parser.add_argument('--gpus-per-node', default=1, type=int, help='Number of GPUs to request')
+    parser.add_argument('--cpus', default=4, type=int, help='Number of CPU cores desired.')
+    parser.add_argument('--mem', default='128G', help='Amount of (CPU) memory desired. Use suffix K|M|G|T')
+    parser.add_argument('--no-python', action='store_true', help="Don't launch python. Still useful if you want the virtualenv, or have your own ex. shell script you want to run in this environment. Extra arguments are interpreted as bash arguments.")
+    parser.add_argument('--tunnel-port', default=None, help="Tunnel a port to the node running the python process.")
+    parser.add_argument(
+        '--env-file',
+        default=str(SCRIPT_DIR / "default_env.sh"),
+        help='File to source environment variables from',
+    )
+    wandb_mode_group = parser.add_mutually_exclusive_group()
+    wandb_mode_group.add_argument(
+        '--wandb-online',
+        action='store_true',
+        help='Force WANDB_MODE=online inside the submitted job.',
+    )
+    wandb_mode_group.add_argument(
+        '--wandb-offline',
+        action='store_true',
+        help='Force WANDB_MODE=offline inside the submitted job.',
+    )
+    parser.add_argument(
+        '--wandb-api-key-file',
+        default=None,
+        help='Path to a file containing the W&B API key for non-interactive batch jobs.',
+    )
+
+    args, rest = parser.parse_known_args()
+
+    env_file = Path(args.env_file).expanduser()
+    if not env_file.is_absolute():
+        env_file = (Path.cwd() / env_file).resolve()
+
+    wandb_api_key_file = None
+    if args.wandb_api_key_file is not None:
+        wandb_api_key_file = Path(args.wandb_api_key_file).expanduser()
+        if not wandb_api_key_file.is_absolute():
+            wandb_api_key_file = (Path.cwd() / wandb_api_key_file).resolve()
+
+    if not VENV_LOC.exists():
+        print(f"Could not find VENV at relative path: {VENV_LOC}")
+        print("This script must be run from repository toplevel")
+        exit(1)
+    if not env_file.exists():
+        print(f"Could not find env file: {env_file}")
+        exit(1)
+    if wandb_api_key_file is not None and not wandb_api_key_file.exists():
+        print(f"Could not find W&B API key file: {wandb_api_key_file}")
+        exit(1)
+    if args.partition == "ai" and args.account is None:
+        print("Warning: submitting to partition 'ai' without --account/-A.")
+        print("If you want the AI allocation, resubmit with: -A cis260502-ai")
+
+    if args.clean_logs:
+        os.system('rm -f sbatch_python.log')
+        os.system('rm -f sbatch_python.log.*')
+        if len(rest) == 0:
+            exit(0)
+
+    base_filename = 'sbatch_python.log'
+    if os.path.exists(base_filename):
+        i = 1
+        output_filename = f'{base_filename}.{i}'
+        while os.path.exists(output_filename):
+            i += 1
+            output_filename = f'{base_filename}.{i}'
+    else:
+        output_filename = base_filename
+    Path(output_filename).touch()
+
+    script_temp_file = SCRIPT_DIR / '.pace_python.sh'
+
+    with open(script_temp_file, 'w') as script_file:
+        if args.no_python:
+            exec_line = '$@'
+        else:
+            exec_line = 'python $@'
+
+        lines = [
+            '#!/bin/env bash',
+            'echo "Running on nodes: $SLURM_NODELIST"',
+            'module load cuda/12.6 || echo "module load cuda/12.6 failed; continuing"',
+            f'source {shlex.quote(str(VENV_LOC))}',
+            f'source {shlex.quote(str(env_file))}',
+        ]
+        if args.wandb_online:
+            lines.append('export WANDB_MODE=online')
+        elif args.wandb_offline:
+            lines.append('export WANDB_MODE=offline')
+        if wandb_api_key_file is not None:
+            lines.append(
+                f'export WANDB_API_KEY="$(tr -d \'\\r\\n\' < {shlex.quote(str(wandb_api_key_file))})"'
+            )
+        lines.append(exec_line)
+        script_file.write("\n".join(lines) + "\n")
+
+    cmd_args = [
+        '-J', args.job_name,
+        '-t', args.time,
+        '-N', '1',
+        '-D', str(Path.cwd()),
+        '-o', output_filename,
+        '--export', 'ALL',
+        '--gpus-per-node', str(args.gpus_per_node),
+        '--mem', args.mem,
+        '-c', str(args.cpus),
+    ]
+    if args.account is not None:
+        cmd_args += ['-A', args.account]
+    cmd_args += [ '--partition', args.partition ]
+    res = subprocess.run(
+        ['sbatch'] + cmd_args + [str(script_temp_file)] + rest,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+    )
+
+    if res.returncode != 0:
+        print("sbatch failed!")
+        print("stdout:", res.stdout)
+        print("stderr:", res.stderr)
+        exit(res.returncode)
+
+    # Submitted batch job <jobid>
+    job_id = res.stdout.strip().split()[-1]
+    print(f"Job ID: {job_id}")
+
+    try:
+        extra_procs = []
+
+        if not os.path.exists(output_filename):
+            print("Waiting for output file...", end='', flush=True)
+            while True:
+                if os.path.exists(output_filename):
+                    success = False
+                    with open(output_filename, 'r') as file:
+                        lines_read = 0
+                        for line in file:
+                            if line.startswith("Running on nodes:"):
+                                node_name = line.split(':', 1)[1].strip()
+                                success = True
+                                break
+                            lines_read += 1
+                            if lines_read > 20: # It should appear on exactly the 10th line
+                                break
+                    if success:
+                        break
+                print(".", end='', flush=True)
+                time.sleep(1)
+            print()
+
+        if args.tunnel_port is not None:
+            ssh_logfile = open(f'{output_filename}.ssh', 'w')
+            extra_procs.append(subprocess.Popen(['ssh', '-vvv', '-oStrictHostKeyChecking=no', '-NT', '-L', f'{args.tunnel_port}:127.0.0.1:{args.tunnel_port}', node_name], stdout=ssh_logfile, stderr=ssh_logfile))
+        subprocess.run(['tail', '-f', '-n100', output_filename])
+    except KeyboardInterrupt:
+        subprocess.run(['scancel', job_id])
+        for proc in extra_procs:
+            proc.terminate()
