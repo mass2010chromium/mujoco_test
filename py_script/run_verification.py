@@ -71,7 +71,7 @@ def main():
 
     SUBTASK_PATH = SCRIPT_DIR / "scene_graph_test_subtasks.txt"            # generatedsubtask samples
     # SUBTASK_PATH = SCRIPT_DIR / "subtask_samples.txt"
-    PDDL_PATH = SCRIPT_DIR / "pddl" / "pick_place_domain.pddl"
+    PDDL_PATH = SCRIPT_DIR / "pddl" / "libero_domain.pddl"
 
     if not IMAGE_PATH.is_file():
         print(f"ERROR: Image not found: {IMAGE_PATH}")
@@ -97,7 +97,7 @@ def main():
     scene_graph = TaskSceneGraph(pddl_domain_text, vlm_interface)
     # Save some tokens for now
     #llm_out = open('tmp').read()
-    scene_graph.read_image(cv2.cvtColor(cv2.imread(IMAGE_PATH), cv2.COLOR_BGR2RGB), ground=True)
+    scene_graph.read_image(cv2.cvtColor(cv2.imread(IMAGE_PATH), cv2.COLOR_BGR2RGB), ground=False)
     print(scene_graph.summary())
 
     verifier = VLAVerifier(scene_graph, llm_interface)
