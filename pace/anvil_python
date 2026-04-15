@@ -136,7 +136,7 @@ if __name__ == "__main__":
     ]
     if args.account is not None:
         cmd_args += ['-A', args.account]
-    cmd_args += [ '--partition', args.partition ]
+    cmd_args += [ '--partition', args.partition, '--qos', args.partition ]
     res = subprocess.run(
         ['sbatch'] + cmd_args + [str(script_temp_file)] + rest,
         stdout=subprocess.PIPE,
