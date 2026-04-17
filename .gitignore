@@ -14,5 +14,6 @@ tmp*
 __pycache__
 .ipynb_checkpoints
 
-checkpoints/
-wandb/
+checkpoints
+assets
+wandb
