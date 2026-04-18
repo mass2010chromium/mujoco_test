@@ -1,5 +1,7 @@
 import functools
 
+import numpy as np
+
 from openpi.policies import policy_config as _policy_config
 from openpi.shared import download
 from openpi.training import config as _config

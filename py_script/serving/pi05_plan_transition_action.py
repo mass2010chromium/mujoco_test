@@ -1,6 +1,8 @@
 import functools
 import re
 
+import numpy as np
+
 from openpi.policies import policy_config as _policy_config
 
 from inference_common import quat2axisangle, register_model
