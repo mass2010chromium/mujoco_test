@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 Wrapper around sbatch for running python scripts.
@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import time
 
@@ -25,9 +26,10 @@ if __name__ == "__main__":
     )
     parser.add_argument('--clean-logs', action='store_true', help='Set to remove logfiles in this directory before running. Does not submit a job if no extra args passed.')
     parser.add_argument('--job-name', '-J', default='deltaAI_python', help='Name of the slurm job.')
+    parser.add_argument('--account', '-A', default=None, help='Slurm account to charge the job to.')
     parser.add_argument('--nodefile', '-F', help='File containing list of eligible nodes to run on. Automatically created as `nodes_<gpu>.txt` if left blank.')
-    parser.add_argument('--cpus', default=2, type=int, help='Number of CPU cores desired.')
-    parser.add_argument('--mem', default='32G', help='Amount of (CPU) memory desired. Use suffix K|M|G|T')
+    parser.add_argument('--cpus', default=4, type=int, help='Number of CPU cores desired.')
+    parser.add_argument('--mem', default='128G', help='Amount of (CPU) memory desired. Use suffix K|M|G|T')
     parser.add_argument('--gpus', '-G', default='nvidia_gh200_120gb', help='GPU to request for the job.')
     parser.add_argument('--gpus-per-node', default=1, type=int, help='Number of GPUs to request')
     parser.add_argument('--no-gpu', action='store_true', help="Don't use a GPU for this job.")
@@ -36,8 +38,30 @@ if __name__ == "__main__":
     parser.add_argument('--no-python', action='store_true', help="Don't launch python. Still useful if you want the virtualenv, or have your own ex. shell script you want to run in this environment. Extra arguments are interpreted as bash arguments.")
     parser.add_argument('--tunnel-port', default=None, help="Tunnel a port to the node running the python process.")
     parser.add_argument('--env-file', default="pace/default_env.sh", help='File to source environment variables from')
+    wandb_mode_group = parser.add_mutually_exclusive_group()
+    wandb_mode_group.add_argument(
+        '--wandb-online',
+        action='store_true',
+        help='Force WANDB_MODE=online inside the submitted job.',
+    )
+    wandb_mode_group.add_argument(
+        '--wandb-offline',
+        action='store_true',
+        help='Force WANDB_MODE=offline inside the submitted job.',
+    )
+    parser.add_argument(
+        '--wandb-api-key-file',
+        default=None,
+        help='Path to a file containing the W&B API key for non-interactive batch jobs.',
+    )
 
     args, rest = parser.parse_known_args()
+
+    wandb_api_key_file = None
+    if args.wandb_api_key_file is not None:
+        wandb_api_key_file = Path(args.wandb_api_key_file).expanduser()
+        if not wandb_api_key_file.is_absolute():
+            wandb_api_key_file = (Path.cwd() / wandb_api_key_file).resolve()
 
     if not os.path.exists(VENV_LOC):
         print(f"Could not find VENV at relative path: {VENV_LOC}")
@@ -46,7 +70,13 @@ if __name__ == "__main__":
 
     if not os.path.exists(PARTITION_FILE):
         print("Could not find partitions definition file.")
-        print(f"Generate one by running: bash -c 'cd {SCRIPT_DIR}/slurm_utils; python extract_nodes.py'")
+        print(
+            f"Generate one by running: bash -c 'cd {SCRIPT_DIR}/slurm_utils; "
+            "bash sinfo.sh; python3 extract_nodes.py'"
+        )
+        exit(1)
+    if wandb_api_key_file is not None and not wandb_api_key_file.exists():
+        print(f"Could not find W&B API key file: {wandb_api_key_file}")
         exit(1)
 
     with open(PARTITION_FILE, 'r') as partition_file:
@@ -81,13 +111,22 @@ if __name__ == "__main__":
         else:
             exec_line = 'python $@'
 
-        script_file.write(
-            f'#!/usr/bin/env bash\n'
-            f'echo "Running on nodes: $SLURM_NODELIST"\n'
-            f'source {VENV_LOC}\n'
-            f'source {args.env_file}\n'
-            f'{exec_line}\n'
-        )
+        lines = [
+            '#!/usr/bin/env bash',
+            'echo "Running on nodes: $SLURM_NODELIST"',
+            f'source {VENV_LOC}',
+            f'source {args.env_file}',
+        ]
+        if args.wandb_online:
+            lines.append('export WANDB_MODE=online')
+        elif args.wandb_offline:
+            lines.append('export WANDB_MODE=offline')
+        if wandb_api_key_file is not None:
+            lines.append(
+                f'export WANDB_API_KEY="$(tr -d \'\\r\\n\' < {shlex.quote(str(wandb_api_key_file))})"'
+            )
+        lines.append(exec_line)
+        script_file.write("\n".join(lines) + "\n")
 
     cmd_args = [
         '-J', args.job_name,
@@ -97,20 +136,28 @@ if __name__ == "__main__":
         '--mem', args.mem,
         '-o', output_filename,
     ]
+    if args.account is not None:
+        cmd_args += ['-A', args.account]
     if not args.no_gpu:
+        gpu_type = args.gpus.split(':')[0]
+        gpu_request = f'{gpu_type}:{args.gpus_per_node}'
         if args.partition is not None:
             partition = args.partition
         else:
-            partition = partition_info[args.gpus.split(':')[0]]
+            partition = partition_info[gpu_type]
         cmd_args += [
-            '-G', args.gpus,
+            '--gpus-per-node', gpu_request,
             '-F', nodefile,
-            #'--gpus-per-node', str(args.gpus_per_node),
             '--partition', partition
         ]
     elif args.partition is not None:
         cmd_args += [ '--partition', args.partition ]
-    res = subprocess.run(['sbatch'] + cmd_args + [script_temp_file] + rest, capture_output=True, text=True)
+    res = subprocess.run(
+        ['sbatch'] + cmd_args + [script_temp_file] + rest,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+    )
 
     if res.returncode != 0:
         print("sbatch failed!")
