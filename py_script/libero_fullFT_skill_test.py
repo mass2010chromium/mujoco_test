@@ -285,6 +285,10 @@ if __name__ == "__main__":
             if hasattr(policy, "start"):
                 policy.start()
 
+            # wait for the env to settle
+            for _ in range(20):
+                obs, reward, done, info = env.step(LIBERO_DUMMY_ACTION)
+
             scene_plan = ''
             # scene_plan = '1. OPEN(top drawer of the cabinet) 2. PICK(black bowl) 3. PLACE(black bowl, top drawer of the cabinet, inside) 4. CLOSE(top drawer of the cabinet)'
             # scene_plan = '1. OPEN(top drawer of the cabinet)'
