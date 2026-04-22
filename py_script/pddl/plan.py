@@ -8,7 +8,7 @@ import textwrap
 from pddlsim.parser import parse_domain, parse_problem
 from pddlsim.simulation import Simulation
 
-with open("pick_place_domain.pddl") as domain_file, open("problem.pddl") as problem_file:
+with open("calvin_domain.pddl") as domain_file, open("calvin_problem.pddl") as problem_file:
     domain = parse_domain(domain_file.read())             # Returns a `Domain` object
     problem = parse_problem(problem_file.read(), domain)
 

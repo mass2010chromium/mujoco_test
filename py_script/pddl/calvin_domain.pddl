@@ -1,41 +1,38 @@
 (define (domain tabletop)
  (:requirements :equality :typing :negative-preconditions :disjunctive-preconditions)
  (:types
-  scene_object
-  immovable - scene_object
-  movable - scene_object
+  scene_object - object                         ; Objects the robot can directly interact with.
+  immovable - scene_object                      ; Containers, surfaces, etc. Might be articulated.
+  movable - scene_object                        ; Things that can be picked up by the robot.
 
-  robot
+  robot - object
+  background - object                           ; Objects the robot cannot directly interact with, like lights.
  )
 
  (:predicates
   (on ?x - scene_object ?y - scene_object)      ; x is resting on y
   (in ?x - scene_object ?y - scene_object)      ; x is inside y
-  (part ?x - scene_object ?y - scene_object)    ; x is an articulated part / sub-region of y
 
   (carry ?r - robot ?x - scene_object)          ; robot is holding x
   (free ?r - robot)                             ; robot gripper is empty
 
-  (container ?x - scene_object)                 ; x can contain other objects
-  (support ?x - scene_object)                   ; x can support an object placed on top
-
   (openable ?x - scene_object)                  ; x can transition between open and closed
   (open ?x - scene_object)
   (closed ?x - scene_object)
+  (no_surface ?x - scene_object)                ; object cannot have things placed on it. For example, a drawer
+                                                ;   in a desk -- the top surface is just the desktop; things can
+                                                ;   be placed in the drawer but not on it.
 
-  (switchable ?x - scene_object)                ; x can be turned on / off (lamp, led)
-  (turned_on ?x - scene_object)
-  (turned_off ?x - scene_object)
+  (switchable ?x)                               ; x can be turned on / off (lamp, led)
+  (turned_on ?x)
+  (turned_off ?x)
 
   (slidable ?x - scene_object)                  ; x can be slid left / right (slider door)
   (at_left ?x - scene_object)                   ; left / right are with respect to the robot
   (at_right ?x - scene_object)
-
-  (pushable ?x - scene_object)                  ; x can be moved laterally while not grasped
-  (rotatable ?x - scene_object)                 ; x can be turned while grasped
  )
 
- (:action pickup_from ; Pick up movable object x from support/container z.
+ (:action pickup_from ; Pick up movable object x from in/on z.
   :parameters (?x - movable ?r - robot ?z - scene_object)
   :precondition
   (and
@@ -44,10 +41,7 @@
     (on ?x ?z)
     (and
      (in ?x ?z)
-     (or
-        (not (openable ?z))
-      (open ?z)
-     )
+     (open ?z)
     )
    )
   )
@@ -65,9 +59,7 @@
   :precondition
   (and
    (carry ?r ?x)
-   (support ?z)
-   (not (carry ?r ?z))
-   (not (= ?x ?z))
+   (not (no_surface ?z))
   )
   :effect
   (and
@@ -82,9 +74,7 @@
   :precondition
   (and
    (carry ?r ?x)
-   (container ?z)
    (open ?z)
-   (not (carry ?r ?z))
    (not (= ?x ?z))
   )
   :effect
@@ -126,7 +116,9 @@
  )
 
  (:action turn_on ; Turn on switchable object x, such as the LED or lightbulb.
-  :parameters (?x - scene_object ?r - robot)
+                  ; The LED is green, and is toggled by pushing a button.
+                  ; The lightbulb is yellow, and is toggled by moving a switch.
+  :parameters (?x ?r - robot)
   :precondition
   (and
    (free ?r)
@@ -141,7 +133,9 @@
  )
 
  (:action turn_off ; Turn off switchable object x, such as the LED or lightbulb.
-  :parameters (?x - scene_object ?r - robot)
+                   ; The LED is green, and is toggled by pushing a button.
+                   ; The lightbulb is yellow, and is toggled by moving a switch.
+  :parameters (?x ?r - robot)
   :precondition
   (and
    (free ?r)
@@ -155,7 +149,7 @@
   )
  )
 
- (:action move_slider_left ; Slide slidable object x to the left to expose the compartment.
+ (:action move_slider_left ; Slide slidable object x to the left to expose the right compartment.
   :parameters (?x - scene_object ?r - robot)
   :precondition
   (and
@@ -164,16 +158,13 @@
    (not (at_left ?x))
   )
   :effect
-  (and
+ (and
    (at_left ?x)
    (not (at_right ?x))
-   ; Sliding the door to either side is treated as making the compartment accessible.
-   (open ?x)
-   (not (closed ?x))
   )
  )
 
- (:action move_slider_right ; Slide slidable object x to the right to expose the compartment.
+ (:action move_slider_right ; Slide slidable object x to the right to expose the left compartment.
   :parameters (?x - scene_object ?r - robot)
   :precondition
   (and
@@ -185,52 +176,31 @@
   (and
    (at_right ?x)
    (not (at_left ?x))
-   ; Same abstraction as move_slider_left: a shifted slider counts as open.
-   (open ?x)
-   (not (closed ?x))
   )
  )
 
  (:action push_left ; Push movable object x leftward along support z without grasping it.
-  :parameters (?x - movable ?r - robot ?z - scene_object)
+  :parameters (?x - movable ?r - robot)
   :precondition
-  (and
-   (free ?r)
-   (pushable ?x)
-   (on ?x ?z)
-   (not (at_left ?x))
-  )
+  (free ?r)
   :effect
-  (and
-   (at_left ?x)
-   (not (at_right ?x))
-  )
+  (free ?r)
  )
 
  (:action push_right ; Push movable object x rightward along support z without grasping it.
-  :parameters (?x - movable ?r - robot ?z - scene_object)
+  :parameters (?x - movable ?r - robot)
   :precondition
-  (and
-   (free ?r)
-   (pushable ?x)
-   (on ?x ?z)
-   (not (at_right ?x))
-  )
+  (free ?r)
   :effect
-  (and
-   (at_right ?x)
-   (not (at_left ?x))
-  )
+  (free ?r)
  )
 
- (:action push_into ; Push movable object x from support src into open container dst without grasping it.
-  :parameters (?x - movable ?r - robot ?src - scene_object ?dst - scene_object)
+ (:action push_into ; Push movable object x from src into open container dst without grasping it.
+  :parameters (?x - movable ?r - robot ?src - scene_object ?dst - immovable)
   :precondition
   (and
    (free ?r)
-   (pushable ?x)
    (on ?x ?src)
-   (container ?dst)
    (open ?dst)
    (not (= ?src ?dst))
   )
@@ -246,7 +216,6 @@
   :precondition
   (and
    (carry ?r ?x)
-   (rotatable ?x)
   )
   :effect
   (and
@@ -261,7 +230,6 @@
   :precondition
   (and
    (carry ?r ?x)
-   (rotatable ?x)
   )
   :effect
   (and
