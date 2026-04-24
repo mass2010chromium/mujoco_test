@@ -37,7 +37,7 @@ SKILL_ARG_COUNTS: dict[str, int] = {
     "TURN_OBJECT": 2,
 }
 
-DIRECTION_ONLY_SKILLS = {"MOVE_SLIDER", "TURN_OBJECT"}
+DIRECTION_ONLY_SKILLS = {"MOVE_SLIDER"}
 DIRECTION_ARG_INDICES = {
     "PUSH": {1},
 }
@@ -139,7 +139,7 @@ Important Notes:
 - Do not translate instructions such as "push down button" or "push button" to PUSH. The button controls the led light, so always treat pushing the button as either TURN_ON(led light) or TURN_OFF(led light).
 - Do not translate instructions such as "move down the switch" or "push the switch downwards" to PUSH or MOVE_SLIDER. The switch controls the light bulb, so always treat manipulating the switch as either TURN_ON(light bulb) or TURN_OFF(light bulb).
 - Typically, manipulating the switch downwards means TURN_OFF(light bulb), while manipulating the switch upwards means TURN_ON(light bulb).
-- TURN_OBJECT(direction) includes grasping the object (unless the object is grasped at episode start), turning the grasped object and potentially placing it down onto the table. So do not have a PLACE_ON skill after TURN_OBJECT, and do not have a PICKUP_FROM before TURN_OBJECT.
+- TURN_OBJECT(object, direction) includes grasping the object (unless the object is grasped at episode start), turning the grasped object and potentially placing it down onto the table. So do not have a PLACE_ON skill after TURN_OBJECT, and do not have a PICKUP_FROM before TURN_OBJECT.
 
 Given the variance in prompt language, for wording consistency, maintain the following object naming conventions:
 - use the term "table" consistently to represent table or table surface
