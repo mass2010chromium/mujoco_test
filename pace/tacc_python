@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import time
 
@@ -65,6 +66,7 @@ if __name__ == "__main__":
         script_file.write(
             f'#!/bin/env bash\n'
             f'echo "Running on nodes: $SLURM_NODELIST"\n'
+            f'echo "Command: {shlex.quote(exec_line)}"\n'
 			f'module load cuda/12.6\n'
             f'source {VENV_LOC}\n'
             f'source {args.env_file}\n'
