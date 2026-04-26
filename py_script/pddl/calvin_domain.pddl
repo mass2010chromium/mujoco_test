@@ -210,6 +210,23 @@
    (in ?x ?dst)
   )
  )
+ (:action push_onto ; Push movable object x off of src and onto dst without grasping it.
+                    ; For example, pushing a block off a tower onto the table.
+  :parameters (?x - movable ?r - robot ?src - scene_object ?dst - immovable)
+  :precondition
+  (and
+   (free ?r)
+   (on ?x ?src)
+   (open ?dst)
+   (not (= ?src ?dst))
+  )
+  :effect
+  (and
+   (not (on ?x ?src))
+   (on ?x ?dst)
+  )
+ )
+
 
  (:action turn_left ; Turn held rotatable object x to the left without modeling orientation state.
   :parameters (?x - movable ?r - robot)
