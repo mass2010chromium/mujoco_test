@@ -12,6 +12,7 @@
  (:predicates
   (on ?x - scene_object ?y - scene_object)      ; x is resting on y
   (in ?x - scene_object ?y - scene_object)      ; x is inside y
+  (part ?x - scene_object ?y - scene_object)    ; x is a component of y (desk compartments, slider door, button, etc.)
 
   (carry ?r - robot ?x - scene_object)          ; robot is holding x
   (free ?r - robot)                             ; robot gripper is empty
@@ -228,31 +229,79 @@
  )
 
 
- (:action turn_left ; Turn held rotatable object x to the left without modeling orientation state.
-  :parameters (?x - movable ?r - robot)
+ (:action turn_object_left_from ; Atomically pick up x if needed, turn it left, and place it back on a support surface.
+  :parameters (?x - movable ?r - robot ?src - scene_object ?dst - immovable)
   :precondition
   (and
-   (carry ?r ?x)
+   (free ?r)
+   (not (no_surface ?dst))
+   (or
+    (on ?x ?src)
+    (and
+     (in ?x ?src)
+     (open ?src)
+    )
+   )
   )
   :effect
   (and
-   ; The held-object relation is preserved because the turn changes no symbolic state we track.
-   (carry ?r ?x)
-   (not (free ?r))
+   (not (on ?x ?src))
+   (not (in ?x ?src))
+   (on ?x ?dst)
+   (free ?r)
   )
  )
 
- (:action turn_right ; Turn held rotatable object x to the right without modeling orientation state.
-  :parameters (?x - movable ?r - robot)
+ (:action turn_object_left_held ; Turn already-held object x left and place it onto a support surface.
+  :parameters (?x - movable ?r - robot ?dst - immovable)
   :precondition
   (and
    (carry ?r ?x)
+   (not (no_surface ?dst))
   )
   :effect
   (and
-   ; This is intentionally a no-op on object state beyond preserving that the robot still holds x.
+   (not (carry ?r ?x))
+   (free ?r)
+   (on ?x ?dst)
+  )
+ )
+
+ (:action turn_object_right_from ; Atomically pick up x if needed, turn it right, and place it back on a support surface.
+  :parameters (?x - movable ?r - robot ?src - scene_object ?dst - immovable)
+  :precondition
+  (and
+   (free ?r)
+   (not (no_surface ?dst))
+   (or
+    (on ?x ?src)
+    (and
+     (in ?x ?src)
+     (open ?src)
+    )
+   )
+  )
+  :effect
+  (and
+   (not (on ?x ?src))
+   (not (in ?x ?src))
+   (on ?x ?dst)
+   (free ?r)
+  )
+ )
+
+ (:action turn_object_right_held ; Turn already-held object x right and place it onto a support surface.
+  :parameters (?x - movable ?r - robot ?dst - immovable)
+  :precondition
+  (and
    (carry ?r ?x)
-   (not (free ?r))
+   (not (no_surface ?dst))
+  )
+  :effect
+  (and
+   (not (carry ?r ?x))
+   (free ?r)
+   (on ?x ?dst)
   )
  )
 )

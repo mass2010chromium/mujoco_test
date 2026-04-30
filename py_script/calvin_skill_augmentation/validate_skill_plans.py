@@ -24,9 +24,9 @@ from common import (  # noqa: E402
     utc_now,
     validate_skill_expr,
 )
-from vla_verify.pddl_parsing import setup_pddl_simulation  # noqa: E402
-from vla_verify.scene_graph import TaskSceneGraph  # noqa: E402
-from vla_verify.verifier import SubtaskVerificationResult, VLAVerifier  # noqa: E402
+from vla_verify_calvin.pddl_parsing import setup_pddl_simulation  # noqa: E402
+from vla_verify_calvin.scene_graph import TaskSceneGraph  # noqa: E402
+from vla_verify_calvin.verifier import SubtaskVerificationResult, VLAVerifier  # noqa: E402
 from vlm_interfaces import (  # noqa: E402
     get_ollama_interfaces,
     get_openrouter_interfaces,

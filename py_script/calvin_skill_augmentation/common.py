@@ -32,7 +32,7 @@ SKILL_ARG_COUNTS: dict[str, int] = {
     "TURN_ON": 1,
     "TURN_OFF": 1,
     "MOVE_SLIDER": 1,
-    "PUSH": 2,
+    "PUSH": 3,
     "PUSH_INTO": 2,
     "TURN_OBJECT": 2,
 }
@@ -40,8 +40,10 @@ SKILL_ARG_COUNTS: dict[str, int] = {
 DIRECTION_ONLY_SKILLS = {"MOVE_SLIDER"}
 DIRECTION_ARG_INDICES = {
     "PUSH": {1},
+    "TURN_OBJECT": {1},
 }
 DIRECTION_VALUES = {"left", "right"}
+PUSH_MODE_VALUES = {"slide", "sweep_off"}
 
 OBJECT_NAME_ALIASES: dict[str, str] = {
     "table surface": "table",
@@ -107,12 +109,20 @@ SKILL_DEFINITIONS = """Allowed skill set and exact syntax:
 - Example: MOVE_SLIDER(left) moves the sliding door to the left
 - Example: MOVE_SLIDER(right) slides the door to the right side
 
-9) PUSH(object, direction)
-- description: push the object toward the direction. This is for pushing or sliding a non-attached, liftable object, not for the slide door or drawer
-- object: the object being pushed or slid, such as a block
-- direction: should be either "left" or "right"
-- Example: PUSH(red block, left) pushes the red block toward the left
-- Example: PUSH(blue block, right) pushes or slides the blue block to the right
+9) PUSH(object, direction, mode)
+- description: push or sweep a non-attached, liftable object in direction without grasping it.
+- object: the object being pushed or swept, such as a block.
+- direction: should be either "left" or "right".
+- mode: should be either "slide" or "sweep_off".
+  - "slide" means the object should move in the given direction while remaining on its original support surface.
+  - "sweep_off" means the object should be pushed in the given direction so that it is removed from its original support, such as sweeping the top block off another block during unstacking.
+- Use PUSH(object, direction, slide) for ordinary push-left / push-right tasks where the object stays on the table or same support.
+- Use PUSH(object, direction, sweep_off) for unstacking by pushing, knocking, or sweeping the object off the object that originally supports it.
+- Do not use PUSH for the sliding door, drawer, button, or switch.
+- Example: PUSH(red block, left, slide) pushes the red block left while it remains on the table.
+- Example: PUSH(blue block, right, slide) slides the blue block right on the same support.
+- Example: PUSH(red block, left, sweep_off) unstack the red block by sweeping the red block left off the block it was originally on.
+- Example: PUSH(pink block, right, sweep_off) remove the pink block from the stack by knocking the pink block right off its supporting block.
 
 10) PUSH_INTO(object, target_container)
 - description: push or sweep the object into the target_container
@@ -131,7 +141,10 @@ Important Notes:
 - PICKUP_FROM is only for liftable and non-attached objects such as blocks that can be picked up and placed.
 - Use OPEN/CLOSE for drawers.
 - Use MOVE_SLIDER for the sliding door.
-- Differentiate PUSH(object, direction) against OPEN, CLOSE, and MOVE_SLIDER. PUSH(object, direction) is for pushing a block or another non-attached object, whereas MOVE_SLIDER is for the sliding door, and OPEN/CLOSE is for the drawer.
+- Differentiate PUSH(object, direction, mode) against OPEN, CLOSE, and MOVE_SLIDER. PUSH(object, direction, mode) is for pushing a block or another non-attached object, whereas MOVE_SLIDER is for the sliding door, and OPEN/CLOSE is for the drawer.
+- Use PUSH(object, direction, slide) when the object should remain on its original support after being pushed.
+- Use PUSH(object, direction, sweep_off) when the object should be removed from its original support, such as sweeping the top block off another block during unstacking.
+- For unstack-related tasks, based on visual demonstration, use PICKUP_FROM(object, support) if the robot grasps and lifts the object from its support; use PUSH(object, direction, sweep_off) if the robot does not grasp the object and instead sweeps/knocks it off its original support.
 - Prefer PLACE_ON for support surfaces and PLACE_IN for containment.
 - Only use OPEN if the object is currently closed.
 - Only use CLOSE if the object is currently open.
@@ -361,6 +374,13 @@ def normalize_direction_arg(arg: str) -> str:
     return normalized
 
 
+def normalize_push_mode_arg(arg: str) -> str:
+    normalized = " ".join(arg.strip().split()).lower()
+    if normalized not in PUSH_MODE_VALUES:
+        raise ValueError(f"PUSH mode must be one of {sorted(PUSH_MODE_VALUES)}, got {arg!r}")
+    return normalized
+
+
 def validate_skill_expr(skill: str) -> str:
     raw = " ".join(skill.strip().split())
     match = SKILL_EXPR_RE.match(raw)
@@ -386,6 +406,9 @@ def validate_skill_expr(skill: str) -> str:
             continue
         if idx in DIRECTION_ARG_INDICES.get(name, set()):
             normalized_args.append(normalize_direction_arg(arg))
+            continue
+        if name == "PUSH" and idx == 2:
+            normalized_args.append(normalize_push_mode_arg(arg))
             continue
 
         normalized_obj = normalize_object_name(arg)
@@ -496,13 +519,22 @@ Segmentation rules:
 - The returned steps must be contiguous and cover the entire episode with no gaps and no overlaps.
 - Use the step overlays in the video to estimate boundaries.
 - The plan must match the exact ordered skill sequence in the returned steps.
-- The demonstration may start with the robot already holding an object. In that case the first skill may legitimately be PLACE_ON(...), PLACE_IN(...), or TURN_OBJECT(...).
+- The demonstration may start with the robot already holding an object. In that case the first skill may legitimately be PLACE_ON(...), PLACE_IN(...), or TURN_OBJECT(object, direction).
 - If a skill is PLACE_ON or PLACE_IN, the object being manipulated is implicit from the object currently grasped by the robot and should not be repeated in the skill arguments.
+- TURN_OBJECT(object, direction) is atomic. It already includes any needed grasping and any needed placement after the rotation, so do not put PICKUP_FROM immediately before it or PLACE_ON / PLACE_IN immediately after it.
 - Annotate every executed skill needed to complete the episode, including prerequisite steps such as OPEN(drawer) before PLACE_IN(drawer), not just the nominal target primitive in the task name.
 - Object descriptions must be short, specific, and contain no commas.
 - When blocks are involved, include the block color whenever needed for disambiguation.
 - Use the naming conventions from the allowed-skill definition block for table, drawer, led light, and light bulb.
 - Assume that the given task instruction is always feasible, the demonstration is successful, and the objects mentioned in the instruction are present in the scene.
+- Use the gripper-state overlay in the top-right corner to help distinguish grasping, holding, releasing, and non-grasped pushing or sweeping. "gripper: open" means the gripper is open; "gripper: closed" means the gripper is closed.
+
+Special notes regarding MOVE_SLIDER:
+- In a MOVE_SLIDER skill, the gripper must be closed during holding and sliding portion. MOVE_SLIDER must have a period where the gripper is closed. Use the gripper overlay to verify this.
+- Pay extra attention to motions that look like MOVE_SLIDER. If the gripper is never closed during the motion, the motion should not be classified as MOVE_SLIDER. Use the gripper overlay to verify this.
+
+Special notes regarding PICKUP_FROM:
+- By the end of a PICKUP_FROM skill, the gripper must be closed. Use the gripper overlay to verify this.
 
 Output format:
 - Return JSON only.
@@ -665,7 +697,23 @@ def decode_image_value(value: Any) -> Any:
     return as_uint8_hwc(value)
 
 
-def overlay_step_text(frame: Any, *, step_idx: int, total_steps: int, instruction: str) -> Any:
+def gripper_state_label(state: Any) -> str:
+    import numpy as np
+
+    array = np.asarray(state, dtype=np.float32).reshape(-1)
+    if array.size == 0:
+        raise ValueError("Cannot infer gripper state from an empty state vector.")
+    return "open" if float(array[-1]) > 0 else "closed"
+
+
+def overlay_step_text(
+    frame: Any,
+    *,
+    step_idx: int,
+    total_steps: int,
+    instruction: str,
+    gripper_state,
+) -> Any:
     from PIL import Image, ImageDraw
 
     image = Image.fromarray(frame)
@@ -677,6 +725,16 @@ def overlay_step_text(frame: Any, *, step_idx: int, total_steps: int, instructio
     draw.rectangle((0, 0, image.width, 34), fill=(0, 0, 0))
     draw.rectangle((0, image.height - 26, image.width, image.height), fill=(0, 0, 0))
     draw.text((8, 8), caption, fill=(255, 255, 255))
+
+    # write gripper text
+    gripper_text = f"gripper: {gripper_state_label(gripper_state)}"
+    try:
+        left, top, right, bottom = draw.textbbox((0, 0), gripper_text)
+    except AttributeError:  # pragma: no cover - older Pillow fallback
+        left, top, right, bottom = (0, 0, 8 * len(gripper_text), 11)
+    text_width = right - left
+    draw.text((max(8, image.width - text_width - 8), 8), gripper_text, fill=(255, 255, 255))
+
     draw.text((8, image.height - 21), subtitle, fill=(255, 255, 255))
     return image
 
@@ -705,6 +763,7 @@ def render_episode_video(
                     step_idx=local_step,
                     total_steps=record.length,
                     instruction=record.instruction,
+                    gripper_state=item["observation.state"],
                 )
             writer.append_data(as_uint8_hwc(frame))
 

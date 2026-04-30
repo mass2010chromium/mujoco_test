@@ -46,7 +46,7 @@ SKILL_NAMES = [
     "TURN_OBJECT",
 ]
 
-REQUIRES_HOLDING = {"PLACE_ON", "PLACE_IN", "TURN_OBJECT"}
+REQUIRES_HOLDING = {"PLACE_ON", "PLACE_IN"}
 REQUIRES_FREE_GRIPPER = {"PICKUP_FROM", "OPEN", "CLOSE", "TURN_ON", "TURN_OFF", "MOVE_SLIDER", "PUSH", "PUSH_INTO"}
 
 
@@ -172,6 +172,8 @@ def validate_skill_sequence_rules(plan_skills: list[str]) -> list[str]:
     for idx, skill in enumerate(plan_skills):
         name, args = parse_skill_expr(skill)
         human_idx = idx + 1
+        prev_name = parse_skill_expr(plan_skills[idx - 1])[0] if idx > 0 else None
+        next_name = parse_skill_expr(plan_skills[idx + 1])[0] if idx + 1 < len(plan_skills) else None
 
         if name in REQUIRES_HOLDING and not holding:
             failures.append(f"Plan step {human_idx} {skill!r} requires a grasped object, but the gripper is free.")
@@ -193,7 +195,23 @@ def validate_skill_sequence_rules(plan_skills: list[str]) -> list[str]:
             continue
 
         if name == "TURN_OBJECT":
-            holding = True
+            if idx > 0 and holding:
+                failures.append(
+                    f"Plan step {human_idx} {skill!r} should be atomic and must not follow a skill "
+                    "that leaves the gripper already holding an object."
+                )
+            if prev_name == "PICKUP_FROM":
+                failures.append(
+                    f"Plan step {human_idx} {skill!r} must absorb its own grasping; do not place "
+                    f"PICKUP_FROM immediately before it."
+                )
+            if next_name in {"PLACE_ON", "PLACE_IN"}:
+                failures.append(
+                    f"Plan step {human_idx} {skill!r} must absorb its own placement; do not place "
+                    f"{next_name} immediately after it."
+                )
+            holding = False
+            held_object = None
             continue
 
         holding = False

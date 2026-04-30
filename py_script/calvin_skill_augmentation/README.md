@@ -213,7 +213,10 @@ The validator writes `validation_results.json` by default.
 ## Notes about CALVIN-specific behavior
 
 - Some CALVIN episodes start with an object already grasped.
-  - That means a valid first skill can be `PLACE_ON(...)`, `PLACE_IN(...)`, or `TURN_OBJECT(...)`.
+  - That means a valid first skill can be `PLACE_ON(...)`, `PLACE_IN(...)`, or `TURN_OBJECT(object, direction)`.
+- `TURN_OBJECT(object, direction)` is treated as one atomic skill in this pipeline.
+  - Do not annotate `PICKUP_FROM(...)` immediately before it.
+  - Do not annotate `PLACE_ON(...)` or `PLACE_IN(...)` immediately after it.
 - The plan validator relies on the saved transition frames.
   - Do not delete `transition_scenes/` before running `validate_skill_plans.py`.
 - Failed annotation episodes are intentionally omitted from shard outputs.
