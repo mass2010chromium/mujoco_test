@@ -93,8 +93,8 @@ class TaskSceneGraph:
         t0 = time.monotonic()
         print(f"  [VLM] Querying VLM for grounding...")
         user_prompt = TaskSceneGraph.GROUND_USER_TEMPLATE.format(
-            image_width=image_width,
-            image_height=image_height,
+#             image_width=image_width,
+#             image_height=image_height,
             scene_graph_pddl=self.pddl_summary(),
             object_json=json.dumps(target_object.to_dict(include_grounding=False), indent=2),
             task_hint=task_hint
@@ -107,7 +107,7 @@ class TaskSceneGraph:
         try:
             result = extract_json_from_response(raw_response)
             assert (result['status'] == "OK" or result['status'] == "NOT_FOUND")
-            result['position'] = np.array(result['position'])[::-1] / [image_width, image_height]
+            result['position'] = np.array(result['position'])[::-1] / 1024 # [image_width, image_height]
             yield result
         except Exception as e:
             print(f"Warning: VLM response extraction raised exception: {e}")
@@ -163,8 +163,6 @@ class TaskSceneGraph:
     ```
     """)
     GROUND_USER_TEMPLATE = textwrap.dedent("""\
-    The image is {image_width} by {image_height} (width x height).
-    
     Current scene state:
     {scene_graph_pddl}
 

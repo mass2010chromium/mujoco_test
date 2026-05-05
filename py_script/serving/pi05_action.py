@@ -41,4 +41,26 @@ def create_pi05_default(model_name, *args):
     policy.run_vla = functools.partial(vanilla_infer, policy)
     return policy
 
+
+def real_infer(policy, obs):
+    prompt = {
+        'observation/image': obs['image'],
+        'observation/wrist_image': obs['wrist_image'],
+        'observation/state': obs['state'],
+        'prompt': policy.task
+    }
+    return policy.infer(prompt)
+
+def create_pi05_real(model_name, config, checkpoint_dir, norm_stats):
+    # TODO: is this used?
+    policy = _policy_config.create_trained_policy(
+        config,
+        checkpoint_dir,
+        norm_stats=norm_stats
+    )
+    policy.initialize = functools.partial(vanilla_init, policy)
+    policy.run_vla = functools.partial(real_infer, policy)
+    return policy
+
 register_base_model(create_pi05_default, "pi05_libero")
+register_model(create_pi05_real, "pi05_real_lora", 999)
