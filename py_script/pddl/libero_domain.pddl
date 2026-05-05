@@ -28,7 +28,8 @@
   (turned_off ?x - scene_object)                ; Object is off.
  )
 
- (:action pickup_from ; Pick up object x from on object z. To pick up a stack of objects, pick up the bottom object
+ (:action pickup_from ; Pick up object x from on object z.
+                      ; To pick up a stack of objects, pick up the bottom object
   :parameters (?x - movable ?r - robot ?z - scene_object)
   :precondition 
   (and 

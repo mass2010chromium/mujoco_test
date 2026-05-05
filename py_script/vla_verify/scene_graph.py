@@ -81,7 +81,7 @@ class TaskSceneGraph:
             print("WARNING: SAM 3 not installed. Grounding is disabled")
         return self._grounder
 
-    def _ground_openrouter(self, llm_response, image_rgb, target_object: SceneObject, task_hint=None, normalize_resolution=1024):
+    def _ground_openrouter(self, llm_response, image_rgb, target_object: SceneObject, task_hint=None):
         """
         Get the (relative) pixel position of an object in the image.
 
@@ -89,9 +89,12 @@ class TaskSceneGraph:
             status:     OK | NOT_FOUND
             position:   [x, y] normalized image coords (top left is 0, 0; bottom right is 1, 1)
         """
+        image_height, image_width = image_rgb.shape[:2]
         t0 = time.monotonic()
         print(f"  [VLM] Querying VLM for grounding...")
         user_prompt = TaskSceneGraph.GROUND_USER_TEMPLATE.format(
+            image_width=image_width,
+            image_height=image_height,
             scene_graph_pddl=self.pddl_summary(),
             object_json=json.dumps(target_object.to_dict(include_grounding=False), indent=2),
             task_hint=task_hint
@@ -104,7 +107,7 @@ class TaskSceneGraph:
         try:
             result = extract_json_from_response(raw_response)
             assert (result['status'] == "OK" or result['status'] == "NOT_FOUND")
-            result['position'] = np.array(result['position'])[::-1] / normalize_resolution
+            result['position'] = np.array(result['position'])[::-1] / [image_with, image_height]
             yield result
         except Exception as e:
             print(f"Warning: VLM response extraction raised exception: {e}")
@@ -160,6 +163,8 @@ class TaskSceneGraph:
     ```
     """)
     GROUND_USER_TEMPLATE = textwrap.dedent("""\
+    The image is {image_width} by {image_height} (width x height).
+    
     Current scene state:
     {scene_graph_pddl}
 
