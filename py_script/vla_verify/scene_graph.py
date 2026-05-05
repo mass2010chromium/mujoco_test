@@ -107,7 +107,7 @@ class TaskSceneGraph:
         try:
             result = extract_json_from_response(raw_response)
             assert (result['status'] == "OK" or result['status'] == "NOT_FOUND")
-            result['position'] = np.array(result['position'])[::-1] / [image_with, image_height]
+            result['position'] = np.array(result['position'])[::-1] / [image_width, image_height]
             yield result
         except Exception as e:
             print(f"Warning: VLM response extraction raised exception: {e}")
