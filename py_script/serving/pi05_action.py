@@ -63,4 +63,4 @@ def create_pi05_real(model_name, config, checkpoint_dir, norm_stats):
     return policy
 
 register_base_model(create_pi05_default, "pi05_libero")
-register_model(create_pi05_real, "pi05_real_lora", 999)
+register_model(create_pi05_real, "pi05_real_lora", 2000)
