@@ -261,6 +261,77 @@ python validate_skill_plans.py \
 
 The symbolic validator can also read the training-style `cot_skill.json`; it reconstructs the canonical skill boundaries by merging adjacent same-skill segments before running plan and transition checks.
 
+## Step 3b: extract semantic targets and contact traces
+
+This folder also contains the target extraction layer built on top of a completed `skill_annotations.json`.
+The explicit script names are `annotate_libero_target_traces.py`, `combine_target_traces.py`, and
+`validate_skill_target_traces.py`; compatibility wrappers are also available as `annotate_libero_traces.py`,
+`combine_trace_annotations.py`, and `validate_trace_annotations.py`.
+
+Run one target-trace shard job:
+
+```bash
+export OPENROUTER_API_KEY=...
+
+python annotate_libero_target_traces.py \
+  libero-100-skill-runs_2 \
+  --output-dir libero-100-skill-runs_2/target_trace_run_a \
+  --start-idx 0 \
+  --end-idx 200 \
+  --skip-existing \
+  --trace-frame-count 50 \
+  --query-image-width 512 \
+  --query-image-height 512
+```
+
+Run disjoint ranges in parallel by changing `--output-dir`, `--start-idx`, and `--end-idx`. Each run writes:
+
+- `episode_shards/episode_000123.json`
+- `errors/episode_000123.error.json`
+- `target_trace_scenes/episode_000123/skill_000_start_step_000000.png`
+- `run_manifest.json`
+
+Combine completed target-trace shards into the annotation folder:
+
+```bash
+python combine_target_traces.py \
+  libero-100-skill-runs_2/target_trace_run_a/episode_shards \
+  libero-100-skill-runs_2/target_trace_run_b/episode_shards \
+  --annotation-dir libero-100-skill-runs_2
+```
+
+The combined output is `libero-100-skill-runs_2/skill_target_traces.json`.
+
+Validate shards or the combined output:
+
+```bash
+python validate_skill_target_traces.py \
+  libero-100-skill-runs_2/skill_target_traces.json
+```
+
+Trace output convention:
+
+- `semantic_target` is always generated from only the first frame of each skill.
+- `contact_prediction` is generated from only the first frame whenever the prediction-based trace is enabled, or whenever `--predict-contact-only` is set.
+- `prediction_trace` tracks that predicted contact point over a sampled segment video.
+- `extraction_trace` directly extracts the first gripper-object contact point from the sampled segment video and tracks it.
+- `end_effector_trace` is a dense projection of `state[0:3]` / `robot0_eef_pos` into the side-view
+  `image` stream for every frame in the skill segment, so a segment `[start_step, end_step)` has exactly
+  `end_step - start_step` EE points. EE traces include project-and-reproject diagnostics from image pixels back
+  into 3D world coordinates.
+- `--trace-frame-count` is a maximum waypoint count, default `50`. Skills shorter than that use every frame; longer skills use evenly spaced sampled frames and store the exact `sampled_frame_indices`.
+
+Use `--no-contact-prediction` to skip only `contact_prediction` and `prediction_trace`.
+Use `--no-contact-extraction` to skip only `extraction_trace`.
+Use `--predict-contact-only` to generate only the first-frame `contact_prediction` without tracking it.
+This flag is independent of `--no-contact-prediction`: setting both produces `contact_prediction` but no
+`prediction_trace`. The predicted point is overlaid in the saved start-frame visualizations alongside other traces.
+Passing both contact-disable flags still generates `semantic_target` and the EE trace, so OpenRouter is still used
+for semantic target extraction.
+Use `--no-ee-trace` only if you want to disable the projected EE trace. The EE projection currently supports the
+default `--image-key image` / LIBERO `agentview` path; wrist-camera projection is not enabled because the wrist
+camera is frame-dependent and the LeRobot state vector does not store enough simulator state to recover it exactly.
+
 ## Step 4: package the final LeRobot dataset root
 
 For local experimentation, use symlinks:
