@@ -11,10 +11,10 @@ def get_openrouter_interfaces():
     print("Using OpenRouter")
     # VLM_MODEL = "google/gemini-2.5-pro"
     # LLM_MODEL = "google/gemini-2.5-flash"
-    VLM_MODEL = "google/gemini-3.1-pro-preview"
-    LLM_MODEL = "google/gemini-3-flash-preview"
-    # VLM_MODEL = "google/gemini-3-flash-preview"
+    # VLM_MODEL = "google/gemini-3.1-pro-preview"
     # LLM_MODEL = "google/gemini-3-flash-preview"
+    VLM_MODEL = "google/gemini-3-flash-preview"
+    LLM_MODEL = "google/gemini-3-flash-preview"
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
