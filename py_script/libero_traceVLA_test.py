@@ -179,6 +179,13 @@ class SkillContext:
     skill_id: int                       # MoE expert id, 0-4
     semantic_target_pixel: tuple[int, int]   # (x, y) pixel
     semantic_target_xy_norm: tuple[float, float]  # (x, y) in [0, 1]
+    # Plan context — fed into the VLM prompt to match training. ``plan_text`` is the
+    # full parsed plan string (same shape as ``skill_annotations.json``'s ``plan``
+    # field, e.g. "1. PICKUP_FROM(...) 2. PLACE_ON(...)"). ``skill_step_num`` is the
+    # 1-based index of this skill within the plan. ``TraceTokenizePrompt`` combines
+    # them with ``skill_text`` into "Plan: <plan_text> Current step: <K>. <skill_text>".
+    plan_text: str = ""
+    skill_step_num: int = 0
     cached_trace_xy_norm: np.ndarray | None = None  # (N, 2) in [0, 1]
 
 
@@ -667,6 +674,10 @@ Your task is to choose one semantically clarifying target point for this skill o
 Semantic hints:
 1. The cookie box is the small, dark brown box
 2. The ramekin is black-silver. 
+3. Tomato sauce is the red and green can.
+4. Alphabet soup is the blue and yellow can.
+5. The back compartment of the caddy is at the center back of the caddy, not toward the right or left side. 
+3. For PLACE_ON/PLACE_IN skills on objects that are close to the camera, select a semantic point on the edge closer to the camera to account for reaching
 
 Coordinate rules:
 - Return coordinates on a fixed output grid width={coordinate_grid}, height={coordinate_grid}.
@@ -783,6 +794,13 @@ def make_planning_obs(libero_obs: dict, calib: dict[str, Any], skill_ctx: SkillC
         # Provide both forms so TraceTokenizePrompt picks the parameterized text first.
         "skill_text": skill_ctx.skill_text,
         "skill_name": skill_ctx.skill_name,
+        # Plan context — forwarded so ``TraceTokenizePrompt`` builds the same
+        # "Plan: <plan_text> Current step: <K>. <skill_text>" prompt that
+        # ``LiberoTraceDataset`` produces at training time. Without these, the
+        # tokenizer falls through to ``skill_text`` alone, which is a direct
+        # train/inference prompt mismatch.
+        "plan_text": skill_ctx.plan_text,
+        "skill_step_num": int(skill_ctx.skill_step_num),
         "prompt": task_description,
         # Marker fields to keep TraceObservation typecheck happy when the policy
         # tries to read these (with `.get(...)` they default to None on missing).
@@ -884,13 +902,13 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="TraceVLA LIBERO inference + benchmark.")
     p.add_argument("--model-name", default="trace_vla_lora",
                     help="TrainConfig name (trace_vla / trace_vla_lora).")
-    p.add_argument("--checkpoint-dir", default="/work/hdd/bgtb/zhong2/checkpoints/trace_vla_lora/trace_vla_lora/30000",
+    p.add_argument("--checkpoint-dir", default="/work/hdd/bgtb/zhong2/checkpoints/trace_vla_lora/trace_vla_lora_v2/30000",
                     help="Path to a TraceVLA checkpoint step dir (containing params/). If omitted, "
                          "we search standard locations under the repo and /work/hdd/bgtb/$USER/checkpoints.")
     p.add_argument("--assets-dir", default=None,
                     help="Optional override for the assets dir (where norm_stats live). "
                          "Defaults to <checkpoint_dir>/assets.")
-    p.add_argument("--task-suite", default="libero_spatial",
+    p.add_argument("--task-suite", default="libero_goal",
                     help="LIBERO task suite name (libero_spatial / libero_object / libero_goal / libero_10 / libero_90).")
     p.add_argument("--target-task-id", type=int, default=None,
                     help="If set, only run this single task id within the suite.")
@@ -908,7 +926,7 @@ def _parse_args() -> argparse.Namespace:
                          '"1. PICKUP_FROM(black bowl, table) 2. PLACE_IN(black bowl, top drawer)"')
 
     # Loop / replanning controls.
-    p.add_argument("--replan-every-chunks", type=int, default=5,
+    p.add_argument("--replan-every-chunks", type=int, default=2,    # at most 3 to match training
                     help="Re-sample the trace every N action chunks within a skill (default 5).")
     p.add_argument("--actions-per-chunk", type=int, default=5,
                     help="Number of env steps to consume per action chunk before calling the model again. "
@@ -921,6 +939,16 @@ def _parse_args() -> argparse.Namespace:
                     help="Predicted progress >= this counts as 'high'.")
     p.add_argument("--consecutive-required", type=int, default=2,
                     help="Number of consecutive 'high' progress checks required before advancing to the next skill.")
+
+    p.add_argument("--trace-freeze-threshold", type=float, default=0.5,
+                    help="Predicted progress >= this counts as 'past mid-skill' for the "
+                         "trace-freeze mechanism (default 0.5). Tied to predict_completion calls "
+                         "(same cadence as --completion-check-interval).")
+    p.add_argument("--trace-freeze-consecutive", type=int, default=100000,      # set to a high number s.t. this is not used
+                    help="Number of consecutive completion-prediction checks at or above "
+                         "--trace-freeze-threshold required to freeze trace re-sampling for the "
+                         "rest of the current skill (default 2). Set to a very large value "
+                         "(e.g. 1000000) to effectively disable the freeze mechanism.")
 
     # OpenRouter / Gemini.
     p.add_argument("--openrouter-model", default=DEFAULT_OPENROUTER_MODEL)
@@ -988,6 +1016,11 @@ def run_episode(*, env, calib: dict[str, Any], policy, task_description: str,
             skill_id=skill_to_atomic_id(skill_text),
             semantic_target_pixel=sem_pixel,
             semantic_target_xy_norm=sem_xy_norm,
+            # Match the training-time prompt: dataset emits the per-episode plan
+            # string and the 1-based current-skill index, which TraceTokenizePrompt
+            # composes into "Plan: ... Current step: K. <skill_text>".
+            plan_text=plan_str,
+            skill_step_num=skill_idx + 1,
         )
         print(f"  [skill={skill_idx} '{skill_ctx.skill_text}'] expert={skill_ctx.skill_id} "
               f"sem_pixel={sem_pixel}", flush=True)
@@ -996,6 +1029,9 @@ def run_episode(*, env, calib: dict[str, Any], policy, task_description: str,
         chunks_since_replan = args.replan_every_chunks   # force replan on the first iteration
         chunks_since_completion_check = 0
         last_progress: float | None = None
+        # Trace-freeze accounting (per-skill; resets on every new skill).
+        consecutive_above_freeze = 0
+        trace_frozen = False
 
         # Per-skill action loop. Bail out when (a) env done, (b) episode length cap,
         # or (c) the consecutive-high threshold fires.
@@ -1006,7 +1042,19 @@ def run_episode(*, env, calib: dict[str, Any], policy, task_description: str,
             ee_xy_norm = pixel_to_normalized_xy(ee_x, ee_y, W, H)
 
             # --- (2) Re-plan trace if needed ---
-            if chunks_since_replan >= args.replan_every_chunks:
+            # Replan when the chunk window expires AND trace re-sampling has not been
+            # frozen for this skill. The freeze flag is set by the late-skill mechanism
+            # below (see "Trace-freeze accounting"). The cached trace from the last
+            # successful sample continues to drive overlay rendering once frozen.
+            need_replan = chunks_since_replan >= args.replan_every_chunks
+            if need_replan and trace_frozen:
+                # Make the freeze visible in the log even when a replan would otherwise have fired.
+                print(f"    chunk-replan suppressed: trace frozen for this skill "
+                      f"(chunks_since_replan={chunks_since_replan})", flush=True)
+                # Reset so we don't print this every chunk while frozen — the next print
+                # will only happen if the freeze is somehow lifted (currently never within a skill).
+                chunks_since_replan = 0
+            elif need_replan:
                 planning_obs = make_planning_obs(obs, calib, skill_ctx, task_description, ee_xy_norm)
                 trace = policy.sample_trace(planning_obs)        # (N, 2) in [0, 1]
                 trace = np.asarray(trace, dtype=np.float32)
@@ -1027,6 +1075,24 @@ def run_episode(*, env, calib: dict[str, Any], policy, task_description: str,
                 progress_only = float(np.asarray(policy.predict_completion(exec_obs)))
                 last_progress = progress_only
                 consecutive_high = consecutive_high + 1 if progress_only >= args.completion_threshold else 0
+
+                # --- Trace-freeze accounting ---
+                # Tied to the predict_completion cadence (= --completion-check-interval).
+                # Once we've been at or above the freeze threshold for N consecutive
+                # checks, stop re-sampling the trace for the rest of this skill — this
+                # avoids the late-skill instability where a fresh stochastic trace is
+                # drawn right before handoff and momentarily disrupts the action expert.
+                if progress_only >= args.trace_freeze_threshold:
+                    consecutive_above_freeze += 1
+                else:
+                    consecutive_above_freeze = 0
+                if not trace_frozen and consecutive_above_freeze >= args.trace_freeze_consecutive:
+                    trace_frozen = True
+                    print(f"    trace freeze: progress={progress_only:.3f} "
+                          f"streak={consecutive_above_freeze} "
+                          f"(>= {args.trace_freeze_threshold:.2f}) "
+                          f"-> stop re-sampling trace for this skill", flush=True)
+
                 if consecutive_high >= args.consecutive_required:
                     print(f"    completion advance: progress={progress_only:.3f} streak={consecutive_high} "
                           f"-> next skill", flush=True)
@@ -1104,10 +1170,34 @@ def main() -> None:
             "(or --openrouter-api-key) so plan generation can use Gemini."
         )
 
+    # Validate the replan window against the trained anchor-age window 
+    # _pre_train_config = _config.get_config(args.model_name)
+    # _pre_data_config = _pre_train_config.data.create(
+    #     _pre_train_config.assets_dirs, _pre_train_config.model
+    # )
+    # h_train_max = int(getattr(_pre_data_config, "h_train_max", 0))
+    # replan_window = int(args.replan_every_chunks) * int(args.actions_per_chunk)
+    # if h_train_max > 0:
+    #     assert replan_window <= h_train_max, (
+    #         f"--replan-every-chunks * --actions-per-chunk = "
+    #         f"{args.replan_every_chunks} * {args.actions_per_chunk} = {replan_window} "
+    #         f"exceeds the trained anchor-age window h_train_max={h_train_max}. "
+    #         f"The cached trace would age past what the action expert was trained on. "
+    #         f"Lower --replan-every-chunks (or --actions-per-chunk) so their product is "
+    #         f"<= {h_train_max}."
+    #     )
+    #     print(
+    #         f"Replan window OK: {args.replan_every_chunks} * {args.actions_per_chunk} = "
+    #         f"{replan_window} <= h_train_max={h_train_max}.",
+    #         flush=True,
+    #     )
+
     benchmark_dict = benchmark.get_benchmark_dict()
     if args.task_suite not in benchmark_dict:
         raise SystemExit(f"Unknown task suite: {args.task_suite!r}. Available: {list(benchmark_dict)!r}")
     task_suite = benchmark_dict[args.task_suite]()
+    print("Task Suite --> ", args.task_suite)
+    print("Replan Very Chunk ---> ", args.replan_every_chunks)
     num_tasks_in_suite = task_suite.n_tasks
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1176,6 +1266,10 @@ def main() -> None:
         print(f"Success rate: {sum(overall_success) / len(overall_success):.3f}", flush=True)
     if failure_records:
         print(f"Failures ({len(failure_records)}): {failure_records}", flush=True)
+    
+    print("Task Suite --> ", args.task_suite)
+    print("Replan Very Chunk ---> ", args.replan_every_chunks)
+    print("total number of trials: ", len(overall_success))
 
 
 if __name__ == "__main__":

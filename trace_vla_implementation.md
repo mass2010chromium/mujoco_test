@@ -55,10 +55,10 @@ Two run configs are exposed:
 
 ```bash
 # Full finetune
-python pace/openpi/scripts/train_trace_vla.py trace_vla --exp-name trace_vla
+python scripts/train_trace_vla.py trace_vla --exp-name trace_vla
 
 # LoRA finetune (LoRA on PaliGemma 2B + gemma_300m action expert; trace MoE + completion head are full FT)
-python pace/openpi/scripts/train_trace_vla.py trace_vla_lora --exp-name trace_vla_lora
+python scripts/train_trace_vla.py trace_vla_lora --exp-name trace_vla_lora
 ```
 
 Both load `yilin-wu/libero-100`. Annotations live at:
