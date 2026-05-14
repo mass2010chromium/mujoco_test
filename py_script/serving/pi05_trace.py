@@ -30,7 +30,8 @@ from pi05_trace_extra import (
 )
 
 OPENROUTER_MODEL = "google/gemini-3.1-pro-preview"
-REPLAN_EVERY_CHUNKS = 5
+#OPENROUTER_MODEL = "google/gemini-3-flash-preview"
+REPLAN_EVERY_CHUNKS = 2 # At most 3 to match training
 ACTIONS_PER_CHUNK = 5
 COMPLETION_THRESHOLD = 0.9
 CONSECUTIVE_REQUIRED = 2
@@ -84,6 +85,7 @@ def run_module():
             images=current_scene_image
         )]
         try:
+            print(llm_response)
             raw_response = llm_response['content']
             result = extract_json_from_response(raw_response)
             sem_pixel = _normalize_semantic_point_response(result, image_width=W, image_height=H)['point_pixel']
@@ -110,6 +112,13 @@ def run_module():
         skill_id: int                       # MoE expert id, 0-4
         semantic_target_pixel: tuple[int, int]   # (x, y) pixel
         semantic_target: tuple[float, float] | tuple[float, float, float]    # (x, y, [depth]), normalized
+        # Plan context — fed into the VLM prompt to match training. ``plan_text`` is the
+        # full parsed plan string (same shape as ``skill_annotations.json``'s ``plan``
+        # field, e.g. "1. PICKUP_FROM(...) 2. PLACE_ON(...)"). ``skill_step_num`` is the
+        # 1-based index of this skill within the plan. ``TraceTokenizePrompt`` combines
+        # them with ``skill_text`` into "Plan: <plan_text> Current step: <K>. <skill_text>".
+        plan_text: str = ""
+        skill_step_num: int = 0
         cached_trace: np.ndarray | None = None  # (N, k) in [0, 1], k=2 or 3
 
     def _make_base_obs(obs: dict) -> dict[str, Any]:
@@ -136,6 +145,13 @@ def run_module():
             # Provide both forms so TraceTokenizePrompt picks the parameterized text first.
             "skill_text": skill_ctx.skill_text,
             "skill_name": skill_ctx.skill_name,
+            # Plan context — forwarded so ``TraceTokenizePrompt`` builds the same
+            # "Plan: <plan_text> Current step: <K>. <skill_text>" prompt that
+            # ``LiberoTraceDataset`` produces at training time. Without these, the
+            # tokenizer falls through to ``skill_text`` alone, which is a direct
+            # train/inference prompt mismatch.
+            "plan_text": skill_ctx.plan_text,
+            "skill_step_num": skill_ctx.skill_step_num,
             "prompt": task_description,
             # Marker fields to keep TraceObservation typecheck happy when the policy
             # tries to read these (with `.get(...)` they default to None on missing).
@@ -218,7 +234,7 @@ def run_module():
         policy._completion_threshold = COMPLETION_THRESHOLD
         policy._consecutive_required = CONSECUTIVE_REQUIRED
         # NOTE: this policy requires as input additional fields in the observation:
-        plan_raw = get_initial_plan(task, np.array(obs['agentview_image'][::-1, ::-1, :], copy=True))['plan'].strip()
+        plan_raw = get_initial_plan(task, np.copy(obs['agentview_image'][::-1, ::-1, :]))['plan'].strip()
         skills = parse_plan(plan_raw)
         policy._task = task
         policy._plan_raw = plan_raw
@@ -228,7 +244,7 @@ def run_module():
         trace_skill_init(policy, obs)
 
     def trace_skill_init(policy, obs):
-        scene_image = np.array(obs['agentview_image'][::-1, ::-1, :], copy=True)
+        scene_image = np.copy(obs['agentview_image'][::-1, ::-1, :])
         H, W = scene_image.shape[:2]
         ee_world = np.asarray(obs["robot0_eef_pos"], dtype=float)
         # TODO:
@@ -254,7 +270,7 @@ def run_module():
 
     def trace_infer(policy, obs):
         # --- Project current EE to image pixel ---
-        scene_image = np.array(obs['agentview_image'][::-1, ::-1, :], copy=True)
+        scene_image = np.copy(obs['agentview_image'][::-1, ::-1, :])
         H, W = scene_image.shape[:2]
         ee_world = np.asarray(obs["robot0_eef_pos"], dtype=float)
         # TODO:
@@ -350,6 +366,6 @@ def run_module():
         return policy
 
 
-    register_model(create_trace_vla_policy, "trace_vla_3d_lora", 25000)
+    register_model(create_trace_vla_policy, "trace_vla_3d_lora", 15000)
 
 run_module()

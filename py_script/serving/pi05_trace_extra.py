@@ -176,6 +176,9 @@ Your task is to choose one semantically clarifying target point for this skill o
 Semantic hints:
 1. The cookie box is the small, dark brown box
 2. The ramekin is black-silver. 
+3. Tomato sauce is the red and green can.
+4. Alphabet soup is the blue and yellow can.
+5. The back compartment of the caddy is at the center back of the caddy, not toward the right or left side.
 
 Coordinate rules:
 - Return coordinates on a fixed output grid width={coordinate_grid}, height={coordinate_grid}.

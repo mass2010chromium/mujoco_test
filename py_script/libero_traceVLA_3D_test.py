@@ -260,7 +260,6 @@ def main() -> None:
         for episode_idx in tqdm.tqdm(range(args.trials_per_task), leave=False):
             env.reset()
             obs = env.set_init_state(initial_states[episode_idx])
-            initial_scene_lerobot = obs["agentview_image"][::-1, ::-1, :]
 
             done, frames = run_episode(
                 task_id, episode_idx,
