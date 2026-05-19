@@ -7,11 +7,23 @@ This script follows the actual `Atomic_libero` training contract:
 - `prefill(...)` decides whether to think or act
 - after a thinking step, we immediately call the policy again on the same
   observation so the updated atomic skill can be converted into actions
+
+Result logging + resume support
+-------------------------------
+After every episode the script writes (atomically) a single ``results.json``
+file under ``--output-dir``. The file is the source of truth for which
+``(task_id, episode_idx)`` pairs have been benchmarked. Re-running with the
+same ``--output-dir`` resumes from the last logged state — already-logged
+``(task_id, episode_idx)`` pairs are skipped, new ones append to the file.
+Pass ``--overwrite-results`` to start fresh and overwrite an existing file.
 """
+import argparse
 import dataclasses
+import json
 import math
 import os
 import pathlib
+import sys
 
 
 def limit_jax_mem(limit: float) -> None:
@@ -38,23 +50,28 @@ from openpi.training import config as _config
 from openpi.policies import policy_config as _policy_config
 
 
-MODEL_NAME = "Atomic_libero"
-TASK_SUITE_NAME = "libero_10"    # "libero_10"   "libero_goal"  "libero_spatial"
-TARGET_TASK_ID = None
+# Defaults — used as argparse defaults; the actual runtime values come from CLI.
+DEFAULT_MODEL_NAME = "Atomic_libero"
+DEFAULT_TASK_SUITE_NAME = "libero_10"
 # Set this to a specific step directory if auto-discovery does not find your run.
-CHECKPOINT_DIR = "/work/hdd/bgtb/zhong2/checkpoints/Atomic_libero/Atomic_libero/100000"
-TRIALS_PER_TASK = 10
-SEED = 7
-EPISODE_LENGTH = 800
-FRAME_RATE = 20
-LIBERO_ENV_RESOLUTION = 224
-REPLAN_FRACTION = 2
-MAX_INTERNAL_POLICY_CALLS = 4
+DEFAULT_CHECKPOINT_DIR = "/work/hdd/bgtb/zhong2/checkpoints/Atomic_libero/Atomic_libero/100000"
+DEFAULT_TRIALS_PER_TASK = 10
+DEFAULT_SEED = 7
+DEFAULT_EPISODE_LENGTH = 800
+DEFAULT_FRAME_RATE = 20
+DEFAULT_LIBERO_ENV_RESOLUTION = 224
+DEFAULT_REPLAN_FRACTION = 2
+DEFAULT_MAX_INTERNAL_POLICY_CALLS = 4
+DEFAULT_ROUTER_OVERLAY_MODE = 2  # 1: selected expert + weights, 2: selected expert + softmax distribution
+DEFAULT_OUTPUT_DIR = pathlib.Path("trial_imgs_atomicVLA")
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 
-ROUTER_OVERLAY_MODE = 2  # 1: selected expert + weights, 2: selected expert + softmax distribution
-
-print("TASK_SUITE_NAME: ", TASK_SUITE_NAME, "; TRIALS_PER_TASK: ", TRIALS_PER_TASK, "; TARGET_TASK_ID: ", TARGET_TASK_ID)
+# Module-level globals updated by main() from argparse — kept as globals so the
+# existing helpers (e.g. `_router_overlay_lines`, `infer_action_chunk`) can read
+# them without us threading them through every signature.
+MAX_INTERNAL_POLICY_CALLS = DEFAULT_MAX_INTERNAL_POLICY_CALLS
+ROUTER_OVERLAY_MODE = DEFAULT_ROUTER_OVERLAY_MODE
+LIBERO_ENV_RESOLUTION = DEFAULT_LIBERO_ENV_RESOLUTION
 
 
 @dataclasses.dataclass(frozen=True)
@@ -261,9 +278,17 @@ def infer_action_chunk(
     task_description: str,
     *,
     infer_since_last_think: int = 0,
-    max_internal_calls: int = MAX_INTERNAL_POLICY_CALLS,
+    max_internal_calls: int | None = None,
 ) -> tuple[np.ndarray, str, int, dict | None]:
-    """Run AtomicVLA until it emits executable actions for the current observation."""
+    """Run AtomicVLA until it emits executable actions for the current observation.
+
+    ``max_internal_calls`` defaults to the module-level ``MAX_INTERNAL_POLICY_CALLS``
+    global, which ``main()`` updates from the ``--max-internal-policy-calls``
+    CLI flag. Default arguments are bound at function-definition time, so we
+    read the global at call time instead.
+    """
+    if max_internal_calls is None:
+        max_internal_calls = MAX_INTERNAL_POLICY_CALLS
     current_skill = _current_atomic_skill(policy)
 
     for _ in range(max_internal_calls):
@@ -330,39 +355,261 @@ def write_skill_to_frame(obs, current_skill, infer_since_last_think, router_debu
     return frame
 
 
-if __name__ == "__main__":
+# ---------------------------------------------------------------------------
+# Result persistence + resume support
+# ---------------------------------------------------------------------------
+
+RESULTS_FILENAME = "results.json"
+
+
+def _results_json_path(output_dir: pathlib.Path) -> pathlib.Path:
+    return pathlib.Path(output_dir) / RESULTS_FILENAME
+
+
+def _summarize_episodes(episodes: list[dict]) -> dict:
+    n = len(episodes)
+    successes = sum(1 for ep in episodes if bool(ep.get("success")))
+    return {
+        "total": n,
+        "successes": successes,
+        "failures": n - successes,
+        "success_rate": (successes / n) if n > 0 else 0.0,
+    }
+
+
+def _write_results_atomic(
+    *,
+    output_dir: pathlib.Path,
+    task_suite: str,
+    model_name: str,
+    checkpoint_dir: pathlib.Path | str,
+    args: argparse.Namespace,
+    completed_episodes: list[dict],
+) -> pathlib.Path:
+    """Atomic write: tmp file + rename. Kills mid-write never leave a corrupt
+    file on disk that would later break resume. The JSON is the source of truth
+    for which (task_id, episode_idx) pairs are done; videos / frames are aux."""
+    path = _results_json_path(output_dir)
+    document = {
+        "task_suite": task_suite,
+        "model_name": model_name,
+        "checkpoint_dir": str(checkpoint_dir),
+        "args": {
+            "trials_per_task": int(args.trials_per_task),
+            "episode_length": int(args.episode_length),
+            "seed": int(args.seed),
+            "target_task_id": (None if args.target_task_id is None else int(args.target_task_id)),
+            "replan_fraction": int(args.replan_fraction),
+            "max_internal_policy_calls": int(args.max_internal_policy_calls),
+            "router_overlay_mode": int(args.router_overlay_mode),
+            "libero_env_resolution": int(args.libero_env_resolution),
+            "frame_rate": int(args.frame_rate),
+        },
+        "summary": _summarize_episodes(completed_episodes),
+        "completed_episodes": completed_episodes,
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+    tmp.replace(path)
+    return path
+
+
+def _load_resume_state(
+    output_dir: pathlib.Path,
+    *,
+    expected_task_suite: str,
+    overwrite: bool,
+) -> tuple[list[dict], set[tuple[int, int]]]:
+    """Return (completed_episodes, done_keys). Both empty if there's nothing to
+    resume. If the file is present but the task_suite disagrees (or parse fails)
+    we raise SystemExit rather than silently overwrite. Use --overwrite-results
+    to discard an existing file."""
+    path = _results_json_path(output_dir)
+    if overwrite:
+        if path.exists():
+            print(f"[results] --overwrite-results set; ignoring existing {path}", flush=True)
+        return [], set()
+    if not path.exists():
+        return [], set()
+    try:
+        doc = json.loads(path.read_text())
+    except Exception as exc:
+        raise SystemExit(
+            f"[resume] failed to parse {path}: {exc}. "
+            f"Either fix the file or pass --overwrite-results to start fresh."
+        )
+    file_suite = doc.get("task_suite")
+    if file_suite != expected_task_suite:
+        raise SystemExit(
+            f"[resume] {path} has task_suite={file_suite!r} but this run is "
+            f"task_suite={expected_task_suite!r}. Either point --output-dir elsewhere "
+            f"or pass --overwrite-results to discard the existing results."
+        )
+    completed = list(doc.get("completed_episodes", []) or [])
+    done_keys: set[tuple[int, int]] = {
+        (int(ep["task_id"]), int(ep["episode_idx"])) for ep in completed
+    }
+    summary = _summarize_episodes(completed)
+    print(
+        f"[resume] loaded {path}: {summary['total']} episodes already done "
+        f"({summary['successes']} success / {summary['failures']} fail; "
+        f"running success rate {summary['success_rate']:.3f})",
+        flush=True,
+    )
+    return completed, done_keys
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="AtomicVLA LIBERO inference + benchmark.")
+    p.add_argument("--model-name", default=DEFAULT_MODEL_NAME,
+                    help="TrainConfig name (default: Atomic_libero).")
+    p.add_argument("--task-suite", default=DEFAULT_TASK_SUITE_NAME,
+                    help="LIBERO task suite name (libero_spatial / libero_object / "
+                         "libero_goal / libero_10 / libero_90).")
+    p.add_argument("--target-task-id", type=int, default=None,
+                    help="If set, only run this single task id within the suite.")
+    p.add_argument("--checkpoint-dir", default=DEFAULT_CHECKPOINT_DIR,
+                    help="Path to a trained AtomicVLA checkpoint step dir (containing params/). "
+                         "Pass an empty string to fall back to auto-discovery.")
+    p.add_argument("--assets-dir", default=None,
+                    help="Optional override for the assets dir (norm_stats). "
+                         "Defaults to pace/openpi/assets/<model_name>.")
+    p.add_argument("--trials-per-task", type=int, default=DEFAULT_TRIALS_PER_TASK)
+    p.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    p.add_argument("--episode-length", type=int, default=DEFAULT_EPISODE_LENGTH,
+                    help="Hard cap on env steps per episode.")
+    p.add_argument("--frame-rate", type=int, default=DEFAULT_FRAME_RATE,
+                    help="Output video FPS.")
+    p.add_argument("--libero-env-resolution", type=int, default=DEFAULT_LIBERO_ENV_RESOLUTION,
+                    help="Camera resolution (square) the LIBERO env renders at.")
+    p.add_argument("--output-dir", type=pathlib.Path, default=DEFAULT_OUTPUT_DIR,
+                    help="Where to save per-trial mp4s, first-frame stills, the "
+                         "per-step debug pngs, and results.json.")
+    p.add_argument("--replan-fraction", type=int, default=DEFAULT_REPLAN_FRACTION,
+                    help="Re-plan after consuming len(actions)//N of the current chunk (default 2).")
+    p.add_argument("--max-internal-policy-calls", type=int, default=DEFAULT_MAX_INTERNAL_POLICY_CALLS,
+                    help="Maximum number of internal infer() calls per acted obs (think+act).")
+    p.add_argument("--router-overlay-mode", type=int, choices=[1, 2],
+                    default=DEFAULT_ROUTER_OVERLAY_MODE,
+                    help="1: shared+selected weights; 2: selected expert + softmax distribution.")
+    p.add_argument("--video-codec", default="mpeg4")
+    p.add_argument("--video-bps", type=int, default=1_000_000)
+    p.add_argument("--no-video", action="store_true",
+                    help="Skip writing the per-trial .mp4 file. The first-frame still PNG "
+                         "is still written (cheap, useful for sanity-checking). By default "
+                         "the mp4 is always written.")
+    p.add_argument("--overwrite-results", action="store_true",
+                    help="Ignore any existing results.json in --output-dir and start fresh. "
+                         "Without this, the script resumes from the last logged state — "
+                         "(task_id, episode_idx) pairs already in results.json are skipped, "
+                         "and new episodes append to the same file.")
+    return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Main inference loop
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    args = _parse_args()
+
+    # Update the module-level globals helpers reference dynamically.
+    global MAX_INTERNAL_POLICY_CALLS, ROUTER_OVERLAY_MODE, LIBERO_ENV_RESOLUTION
+    MAX_INTERNAL_POLICY_CALLS = int(args.max_internal_policy_calls)
+    ROUTER_OVERLAY_MODE = int(args.router_overlay_mode)
+    LIBERO_ENV_RESOLUTION = int(args.libero_env_resolution)
+
+    print(
+        f"TASK_SUITE_NAME: {args.task_suite}; "
+        f"TRIALS_PER_TASK: {args.trials_per_task}; "
+        f"TARGET_TASK_ID: {args.target_task_id}",
+        flush=True,
+    )
+
     benchmark_dict = benchmark.get_benchmark_dict()
-    task_suite = benchmark_dict[TASK_SUITE_NAME]()
+    if args.task_suite not in benchmark_dict:
+        raise SystemExit(
+            f"Unknown task suite: {args.task_suite!r}. Available: {list(benchmark_dict)!r}"
+        )
+    task_suite = benchmark_dict[args.task_suite]()
     num_tasks_in_suite = task_suite.n_tasks
 
-    openpi_root = pathlib.Path(__file__).resolve().parent.parent / "pace" / "openpi"
-    assets_dir = openpi_root / "assets" / MODEL_NAME
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resume BEFORE the slow model load so suite-mismatch / corrupt-file fails fast.
+    completed_episodes, done_keys = _load_resume_state(
+        args.output_dir,
+        expected_task_suite=args.task_suite,
+        overwrite=args.overwrite_results,
+    )
+
+    if args.assets_dir is not None:
+        assets_dir = pathlib.Path(args.assets_dir)
+    else:
+        openpi_root = pathlib.Path(__file__).resolve().parent.parent / "pace" / "openpi"
+        assets_dir = openpi_root / "assets" / args.model_name
+
+    # An empty --checkpoint-dir means "fall back to auto-discovery".
+    checkpoint_dir_arg = args.checkpoint_dir if args.checkpoint_dir else None
 
     print("Loading AtomicVLA policy...", end="", flush=True)
     policy, checkpoint_dir = create_atomic_policy(
-        MODEL_NAME,
-        checkpoint_dir=CHECKPOINT_DIR,
+        args.model_name,
+        checkpoint_dir=checkpoint_dir_arg,
         assets_dir=assets_dir,
     )
-    print("Done.")
-    print(f"Using checkpoint: {checkpoint_dir}")
+    print("Done.", flush=True)
+    print(f"Using checkpoint: {checkpoint_dir}", flush=True)
 
-    trial_image_dir = pathlib.Path("trial_imgs")
+    # Per-step debug pngs go under a sub-dir of --output-dir.
+    trial_image_dir = args.output_dir / "trial_imgs"
     trial_image_dir.mkdir(parents=True, exist_ok=True)
 
-    trials_success = []
-    failture_records = []
+    # Rebuild the convenience lists from resume state so end-of-run summaries
+    # and per-episode appends include episodes carried over from previous runs.
+    trials_success: list[int] = [1 if ep.get("success") else 0 for ep in completed_episodes]
+    failture_records: list[dict] = [
+        {k: ep[k] for k in ("task_id", "episode_idx", "task_prompt") if k in ep}
+        for ep in completed_episodes if not ep.get("success")
+    ]
 
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
-        task = task_suite.get_task(task_id)
-
-        if TARGET_TASK_ID is not None and task_id != TARGET_TASK_ID:
+        if args.target_task_id is not None and task_id != args.target_task_id:
             continue
 
-        initial_states = task_suite.get_task_init_states(task_id)
-        env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, SEED)
+        # Task-level fast-skip: skip env setup entirely if all episodes are done.
+        remaining_episode_indices = [
+            ep_idx for ep_idx in range(args.trials_per_task)
+            if (task_id, ep_idx) not in done_keys
+        ]
+        if not remaining_episode_indices:
+            print(
+                f"[Task {task_id}] all {args.trials_per_task} episodes already done -> skip",
+                flush=True,
+            )
+            continue
 
-        for episode_idx in tqdm.tqdm(range(TRIALS_PER_TASK)):
+        task = task_suite.get_task(task_id)
+        initial_states = task_suite.get_task_init_states(task_id)
+        env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
+        print(
+            f"[Task {task_id}] '{task_description}'  (remaining episodes: {remaining_episode_indices})",
+            flush=True,
+        )
+
+        for episode_idx in tqdm.tqdm(range(args.trials_per_task), leave=False):
+            # Resume: skip already-logged episodes.
+            if (task_id, episode_idx) in done_keys:
+                print(
+                    f"[Task {task_id} ep {episode_idx}] already in results.json -> skip",
+                    flush=True,
+                )
+                continue
+
             env.reset()
             obs = env.set_init_state(initial_states[episode_idx])
 
@@ -377,21 +624,19 @@ if __name__ == "__main__":
 
             infer_since_last_think = 0
             actions, current_skill, infer_since_last_think, router_debug = infer_action_chunk(
-                policy,
-                obs,
-                task_description,
+                policy, obs, task_description,
                 infer_since_last_think=infer_since_last_think,
             )
-            print(f"[Task {task_id}] Task: {task_description}")
-            print(f"[Task {task_id}] Starting atomic skill: {current_skill or '<empty>'}")
+            print(f"[Task {task_id}] Task: {task_description}", flush=True)
+            print(f"[Task {task_id}] Starting atomic skill: {current_skill or '<empty>'}", flush=True)
 
             frames = []
             wrist_frames = []
             trajectory_idx = 0
-            replan_interval = max(1, len(actions) // REPLAN_FRACTION)
+            replan_interval = max(1, len(actions) // int(args.replan_fraction))
             done = False
 
-            for step_idx in range(EPISODE_LENGTH):
+            for step_idx in range(args.episode_length):
                 act = np.copy(actions[trajectory_idx])
                 obs, reward, done, info = env.step(act)
                 frames.append(write_skill_to_frame(obs, current_skill, infer_since_last_think, router_debug))
@@ -403,14 +648,12 @@ if __name__ == "__main__":
 
                 if trajectory_idx >= replan_interval:
                     actions, next_skill, infer_since_last_think, router_debug = infer_action_chunk(
-                        policy,
-                        obs,
-                        task_description,
+                        policy, obs, task_description,
                         infer_since_last_think=infer_since_last_think,
                     )
                     if next_skill:
                         current_skill = next_skill
-                    print(f"[Step {step_idx}] Atomic skill: {current_skill or '<empty>'}")
+                    print(f"[Step {step_idx}] Atomic skill: {current_skill or '<empty>'}", flush=True)
 
                     mediapy.write_image(
                         trial_image_dir / f"frame_agentview_task{task_id}_step{step_idx}.png",
@@ -422,40 +665,74 @@ if __name__ == "__main__":
                     )
 
                     trajectory_idx = 0
-                    replan_interval = max(1, len(actions) // REPLAN_FRACTION)
+                    replan_interval = max(1, len(actions) // int(args.replan_fraction))
 
             trials_success.append(1 if done else 0)
             if not done:
-                failture_records.append(
-                    {
-                        "task_id": task_id,
-                        "episode_idx": episode_idx,
-                        "task_prompt": task_description,
-                    }
-                )
+                failture_records.append({
+                    "task_id": task_id,
+                    "episode_idx": episode_idx,
+                    "task_prompt": task_description,
+                })
 
             if frames:
-                mediapy.write_image(f"franka_libero_atomicVLA_task{task_id}_f0.png", frames[0])
-                mediapy.write_video(
-                    f"{TASK_SUITE_NAME}_benchmark/franka_libero_atomicVLA_task{task_id}_ep{episode_idx}.mp4",
-                    frames,
-                    fps=FRAME_RATE,
-                    codec="mpeg4",
-                    bps=1_000_000,
+                first_path = args.output_dir / f"franka_libero_atomicVLA_task{task_id}_f0.png"
+                video_path = (
+                    args.output_dir
+                    / f"{args.task_suite}_atomicVLA_task{task_id}_ep{episode_idx}.mp4"
                 )
+                mediapy.write_image(first_path, frames[0])
+                if args.no_video:
+                    print(f"  -> wrote {first_path} (--no-video set; skipped mp4)", flush=True)
+                else:
+                    mediapy.write_video(
+                        video_path, frames, fps=args.frame_rate,
+                        codec=args.video_codec, bps=args.video_bps,
+                    )
+                    print(f"  -> wrote {video_path} ({len(frames)} frames)", flush=True)
 
-            # if wrist_frames:
-            #     mediapy.write_video(
-            #         f"franka_libero_atomicVLA_wrist_task{task_id}_ep{episode_idx}.mp4",
-            #         wrist_frames,
-            #         fps=FRAME_RATE,
-            #         codec="mpeg4",
-            #         bps=1_000_000,
-            #     )
+            # Persist results AFTER per-episode artifacts are on disk, so any
+            # episode logged in completed_episodes is guaranteed to have its
+            # companion files. The JSON is the source of truth for resume.
+            episode_record = {
+                "task_id": int(task_id),
+                "episode_idx": int(episode_idx),
+                "success": bool(done),
+                "task_prompt": task_description,
+            }
+            completed_episodes.append(episode_record)
+            done_keys.add((int(task_id), int(episode_idx)))
+            result_path = _write_results_atomic(
+                output_dir=args.output_dir,
+                task_suite=args.task_suite,
+                model_name=args.model_name,
+                checkpoint_dir=checkpoint_dir,
+                args=args,
+                completed_episodes=completed_episodes,
+            )
+            running = _summarize_episodes(completed_episodes)
+            print(
+                f"  -> {result_path}: {running['total']} episodes done overall, "
+                f"running success rate {running['success_rate']:.3f} "
+                f"({running['successes']}/{running['total']})",
+                flush=True,
+            )
 
-    print(f"Trials success: {trials_success}")
-    print(f"Failture records: {failture_records}")
-    if trials_success:
-        print(f"Trials success rate: {sum(trials_success) / len(trials_success)}")
-    else:
-        print("Trials success rate: no episodes were run.")
+        if hasattr(env, "close"):
+            env.close()
+
+    # Final summary — read from the JSON-on-disk source of truth.
+    final = _summarize_episodes(completed_episodes)
+    print(f"Trials success: {trials_success}", flush=True)
+    print(f"Failture records: {failture_records}", flush=True)
+    print(
+        f"Success rate: {final['success_rate']:.3f}  ({final['successes']}/{final['total']})",
+        flush=True,
+    )
+    print(f"Task Suite: {args.task_suite}", flush=True)
+    print(f"Total trials: {final['total']}", flush=True)
+    print(f"Results JSON: {_results_json_path(args.output_dir)}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

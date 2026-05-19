@@ -895,16 +895,153 @@ def render_video_frame(base_image: np.ndarray, *, trace_xy_norm: np.ndarray | No
 
 
 # ---------------------------------------------------------------------------
+# Result persistence + resume support
+# ---------------------------------------------------------------------------
+
+RESULTS_FILENAME = "results.json"
+
+
+def _results_json_path(output_dir: pathlib.Path) -> pathlib.Path:
+    return pathlib.Path(output_dir) / RESULTS_FILENAME
+
+
+def _summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
+    n = len(episodes)
+    successes = sum(1 for ep in episodes if bool(ep.get("success")))
+    return {
+        "total": n,
+        "successes": successes,
+        "failures": n - successes,
+        "success_rate": (successes / n) if n > 0 else 0.0,
+    }
+
+
+def _write_results_atomic(
+    *,
+    output_dir: pathlib.Path,
+    task_suite: str,
+    model_name: str,
+    checkpoint_dir: pathlib.Path | str,
+    args: argparse.Namespace,
+    completed_episodes: list[dict[str, Any]],
+) -> pathlib.Path:
+    """Write the results JSON atomically (temp file + rename).
+
+    A kill mid-write therefore never leaves a corrupt file on disk that would
+    later break resume. The JSON is the source of truth for which
+    (task_id, episode_idx) pairs are 'done'; the per-trial mp4s + first-frame
+    pngs are auxiliary outputs.
+    """
+    path = _results_json_path(output_dir)
+    document = {
+        "task_suite": task_suite,
+        "model_name": model_name,
+        "checkpoint_dir": str(checkpoint_dir),
+        "args": {
+            "trials_per_task": int(args.trials_per_task),
+            "episode_length": int(args.episode_length),
+            "seed": int(args.seed),
+            "target_task_id": (None if args.target_task_id is None else int(args.target_task_id)),
+            "replan_every_chunks": int(args.replan_every_chunks),
+            "actions_per_chunk": int(args.actions_per_chunk),
+            "completion_check_interval": int(args.completion_check_interval),
+            "completion_threshold": float(args.completion_threshold),
+            "consecutive_required": int(args.consecutive_required),
+            "trace_freeze_threshold": float(args.trace_freeze_threshold),
+            "trace_freeze_consecutive": int(args.trace_freeze_consecutive),
+        },
+        "summary": _summarize_episodes(completed_episodes),
+        "completed_episodes": completed_episodes,
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+    tmp.replace(path)
+    return path
+
+
+def _load_resume_state(
+    output_dir: pathlib.Path,
+    *,
+    expected_task_suite: str,
+    overwrite: bool,
+) -> tuple[list[dict[str, Any]], set[tuple[int, int]]]:
+    """Return (completed_episodes, done_keys), both empty if there's nothing to resume.
+
+    If a results.json exists in `output_dir` but its task_suite disagrees with
+    `expected_task_suite` (or it fails to parse), we refuse to silently overwrite
+    it and raise SystemExit so the user can intervene. Passing `overwrite=True`
+    (the `--overwrite-results` flag) ignores any existing file and starts fresh.
+    """
+    path = _results_json_path(output_dir)
+    if overwrite:
+        if path.exists():
+            print(f"[results] --overwrite-results set; ignoring existing {path}", flush=True)
+        return [], set()
+    if not path.exists():
+        return [], set()
+    try:
+        doc = json.loads(path.read_text())
+    except Exception as exc:
+        raise SystemExit(
+            f"[resume] failed to parse {path}: {exc}. "
+            f"Either fix the file or pass --overwrite-results to start fresh."
+        )
+    file_suite = doc.get("task_suite")
+    if file_suite != expected_task_suite:
+        raise SystemExit(
+            f"[resume] {path} has task_suite={file_suite!r} but this run is "
+            f"task_suite={expected_task_suite!r}. Either point --output-dir elsewhere "
+            f"or pass --overwrite-results to discard the existing results."
+        )
+    completed = list(doc.get("completed_episodes", []) or [])
+    done_keys: set[tuple[int, int]] = {
+        (int(ep["task_id"]), int(ep["episode_idx"])) for ep in completed
+    }
+    summary = _summarize_episodes(completed)
+    print(
+        f"[resume] loaded {path}: {summary['total']} episodes already done "
+        f"({summary['successes']} success / {summary['failures']} fail; "
+        f"running success rate {summary['success_rate']:.3f})",
+        flush=True,
+    )
+    return completed, done_keys
+
+
+# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="TraceVLA LIBERO inference + benchmark.")
-    p.add_argument("--model-name", default="trace_vla_lora",
-                    help="TrainConfig name (trace_vla / trace_vla_lora).")
-    p.add_argument("--checkpoint-dir", default="/work/hdd/bgtb/zhong2/checkpoints/trace_vla_lora/trace_vla_lora_v2/30000",
+
+    # p.add_argument("--model-name", default="trace_vla",
+    #                 help="TrainConfig name (trace_vla / trace_vla).")
+    # p.add_argument("--checkpoint-dir", default="/work/hdd/bgtb/zhong2/checkpoints/trace_vla/trace_vla/95000",
+    #                 help="Path to a TraceVLA checkpoint step dir (containing params/). If omitted, "
+    #                      "we search standard locations under the repo and /work/hdd/bgtb/$USER/checkpoints.")
+
+    #################### Variant of TraceVLA with MoE Action Head ######################################
+    # p.add_argument("--model-name", default="trace_vla_actionmoe_lora",
+    #                 help="TrainConfig name (trace_vla_actionmoe / trace_vla_actionmoe_lora).")
+    # p.add_argument("--checkpoint-dir", default="/work/hdd/bgtb/zhong2/checkpoints/trace_vla_actionmoe_lora/trace_vla_actionmoe_lora/30000",
+    #                 help="Path to a TraceVLA checkpoint step dir (containing params/). If omitted, "
+    #                      "we search standard locations under the repo and /work/hdd/bgtb/$USER/checkpoints.")
+
+
+    # #################### Variant of TraceVLA with MoE Trace + MoE Action Head LoRA ######################################
+    # p.add_argument("--model-name", default="trace_vla_moe_lora",
+    #                 help="TrainConfig name (trace_vla_moe / trace_vla_moe_lora).")
+    # p.add_argument("--checkpoint-dir", default="/work/hdd/bgtb/zhong2/checkpoints/trace_vla_moe_lora/trace_vla_moe_lora/35000",
+    #                 help="Path to a TraceVLA checkpoint step dir (containing params/). If omitted, "
+    #                      "we search standard locations under the repo and /work/hdd/bgtb/$USER/checkpoints.")
+    
+        #################### Variant of TraceVLA with MoE Trace + MoE Action Head ######################################
+    p.add_argument("--model-name", default="trace_vla_moe",
+                    help="TrainConfig name (trace_vla_moe / trace_vla_moe).")
+    p.add_argument("--checkpoint-dir", default="/work/hdd/bgtb/zhong2/checkpoints/trace_vla_moe/trace_vla_moe/100000",
                     help="Path to a TraceVLA checkpoint step dir (containing params/). If omitted, "
                          "we search standard locations under the repo and /work/hdd/bgtb/$USER/checkpoints.")
+
     p.add_argument("--assets-dir", default=None,
                     help="Optional override for the assets dir (where norm_stats live). "
                          "Defaults to <checkpoint_dir>/assets.")
@@ -962,6 +1099,15 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--video-codec", default="mpeg4",
                     help="mediapy codec for output video.")
     p.add_argument("--video-bps", type=int, default=1_000_000)
+    p.add_argument("--no-video", action="store_true",
+                    help="Skip writing the per-trial .mp4 file. The first-frame still PNG "
+                         "is still written (cheap, useful for sanity-checking). By default "
+                         "the mp4 is always written.")
+    p.add_argument("--overwrite-results", action="store_true",
+                    help="Ignore any existing results.json in --output-dir and start fresh. "
+                         "Without this, the script resumes from the last logged state — "
+                         "(task_id, episode_idx) pairs already in results.json are skipped, "
+                         "and new episodes append to the same file.")
     return p.parse_args()
 
 
@@ -1202,6 +1348,15 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Resume state must be loaded BEFORE policy load so any user-error
+    # (e.g. wrong --task-suite for the existing results.json) fails fast,
+    # without paying the cost of loading the model.
+    completed_episodes, done_keys = _load_resume_state(
+        args.output_dir,
+        expected_task_suite=args.task_suite,
+        overwrite=args.overwrite_results,
+    )
+
     print(f"Loading TraceVLA policy ({args.model_name})...", end="", flush=True)
     policy, checkpoint_dir, _ = create_trace_vla_policy(
         args.model_name, checkpoint_dir=args.checkpoint_dir, assets_dir=args.assets_dir,
@@ -1209,19 +1364,52 @@ def main() -> None:
     print(" Done.", flush=True)
     print(f"Using checkpoint: {checkpoint_dir}", flush=True)
 
-    overall_success: list[int] = []
-    failure_records: list[dict[str, Any]] = []
+    # Rebuild the convenience lists from resume state so end-of-run prints
+    # (and per-episode appends) include episodes carried over from previous runs.
+    overall_success: list[int] = [1 if ep.get("success") else 0 for ep in completed_episodes]
+    failure_records: list[dict[str, Any]] = [
+        {k: ep[k] for k in ("task_id", "episode_idx", "task_prompt", "plan") if k in ep}
+        for ep in completed_episodes if not ep.get("success")
+    ]
 
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
         if args.target_task_id is not None and task_id != args.target_task_id:
             continue
+
+        # Skip the whole task — and its non-trivial env setup — if every episode
+        # has already been logged for this task in a previous run.
+        remaining_episode_indices = [
+            ep_idx for ep_idx in range(args.trials_per_task)
+            if (task_id, ep_idx) not in done_keys
+        ]
+        if not remaining_episode_indices:
+            print(
+                f"[Task {task_id}] all {args.trials_per_task} episodes already done -> skip",
+                flush=True,
+            )
+            continue
+
         task = task_suite.get_task(task_id)
         initial_states = task_suite.get_task_init_states(task_id)
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
         calib = _compute_camera_calibration(env)
-        print(f"[Task {task_id}] '{task_description}'", flush=True)
+        print(
+            f"[Task {task_id}] '{task_description}'  (remaining episodes: {remaining_episode_indices})",
+            flush=True,
+        )
 
         for episode_idx in tqdm.tqdm(range(args.trials_per_task), leave=False):
+            # Resume: skip individual episodes already logged. We iterate the full
+            # range so the dataset's per-episode `set_init_state(initial_states[i])`
+            # indexing stays semantically correct, but bail out before any work for
+            # episodes already in results.json.
+            if (task_id, episode_idx) in done_keys:
+                print(
+                    f"[Task {task_id} ep {episode_idx}] already in results.json -> skip",
+                    flush=True,
+                )
+                continue
+
             env.reset()
             obs = env.set_init_state(initial_states[episode_idx])
             initial_scene_lerobot = _to_lerobot_image(obs["agentview_image"])
@@ -1255,21 +1443,59 @@ def main() -> None:
                 video_path = args.output_dir / f"{args.task_suite}_traceVLA_task{task_id}_ep{episode_idx}.mp4"
                 still_path = args.output_dir / f"{args.task_suite}_traceVLA_task{task_id}_ep{episode_idx}_first.png"
                 mediapy.write_image(still_path, frames[0])
-                mediapy.write_video(video_path, frames, fps=args.frame_rate,
-                                      codec=args.video_codec, bps=args.video_bps)
-                print(f"  -> wrote {video_path} ({len(frames)} frames)", flush=True)
+                if args.no_video:
+                    print(f"  -> wrote {still_path} (--no-video set; skipped mp4)", flush=True)
+                else:
+                    mediapy.write_video(video_path, frames, fps=args.frame_rate,
+                                          codec=args.video_codec, bps=args.video_bps)
+                    print(f"  -> wrote {video_path} ({len(frames)} frames)", flush=True)
+
+            # Persist the per-episode result to disk BEFORE moving on. The JSON
+            # is the source of truth for resume, so we update it after the
+            # episode-side artifacts (video/still) are written — that way, a
+            # logged episode is guaranteed to have its companion files on disk.
+            episode_record = {
+                "task_id": int(task_id),
+                "episode_idx": int(episode_idx),
+                "success": bool(done),
+                "task_prompt": task_description,
+                "plan": plan_str,
+            }
+            completed_episodes.append(episode_record)
+            done_keys.add((int(task_id), int(episode_idx)))
+            result_path = _write_results_atomic(
+                output_dir=args.output_dir,
+                task_suite=args.task_suite,
+                model_name=args.model_name,
+                checkpoint_dir=checkpoint_dir,
+                args=args,
+                completed_episodes=completed_episodes,
+            )
+            running = _summarize_episodes(completed_episodes)
+            print(
+                f"  -> {result_path}: {running['total']} episodes done overall, "
+                f"running success rate {running['success_rate']:.3f} "
+                f"({running['successes']}/{running['total']})",
+                flush=True,
+            )
 
         env.close() if hasattr(env, "close") else None
 
+    # Final summary — read from the same source of truth that's on disk so the
+    # printed numbers always match results.json.
+    final = _summarize_episodes(completed_episodes)
     print(f"Trials success: {overall_success}", flush=True)
-    if overall_success:
-        print(f"Success rate: {sum(overall_success) / len(overall_success):.3f}", flush=True)
+    print(
+        f"Success rate: {final['success_rate']:.3f}  ({final['successes']}/{final['total']})",
+        flush=True,
+    )
     if failure_records:
         print(f"Failures ({len(failure_records)}): {failure_records}", flush=True)
-    
+
     print("Task Suite --> ", args.task_suite)
     print("Replan Very Chunk ---> ", args.replan_every_chunks)
-    print("total number of trials: ", len(overall_success))
+    print("total number of trials: ", final["total"])
+    print(f"Results JSON: {_results_json_path(args.output_dir)}", flush=True)
 
 
 if __name__ == "__main__":
