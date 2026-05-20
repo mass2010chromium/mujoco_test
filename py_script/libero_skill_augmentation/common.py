@@ -25,7 +25,7 @@ SKILL_ARG_COUNTS: dict[str, int] = {
     "TURN_OFF": 1,
 }
 
-SKILL_DEFINITIONS = """Allowed skill set and exact syntax:
+SKILL_DEFINITIONS_TABLETASK = """Allowed skill set and exact syntax:
 1) PLACE_ON(object1, object2)
 - description: place object1 onto object2
 - object1: the object being placed
@@ -100,6 +100,7 @@ Notes:
 - Only use OPEN if the object is currently closed.
 - Only use CLOSE if the object is currently open.
 """
+SKILL_DEFINITIONS = SKILL_DEFINITIONS_LIBERO
 
 SKILL_EXPR_RE = re.compile(r"^([A-Z_]+)\((.*)\)$")
 EPISODE_FILE_RE = re.compile(r"^episode_(\d{6})\.json$")
