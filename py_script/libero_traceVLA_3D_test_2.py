@@ -378,7 +378,7 @@ def create_trace_vla_policy(model_name: str, checkpoint_dir: str | os.PathLike[s
     #checkpoint_dir = resolve_checkpoint_dir(model_name, checkpoint_dir=checkpoint_dir, exp_name=model_name)
     import openpi
     OPENPI_ROOT = os.path.join(os.path.dirname(os.path.abspath(openpi.__file__)), '..', '..')
-    checkpoint_dir = pathlib.Path(os.path.join(OPENPI_ROOT, 'checkpoints', model_name, 'trace_vla_3d_lora', '15000'))
+    checkpoint_dir = pathlib.Path(os.path.join(OPENPI_ROOT, 'checkpoints', model_name, 'trace_vla_3d_lora_data_fix', '30000'))
     _, norm_stats = _load_norm_stats(train_config, checkpoint_dir, assets_dir=assets_dir)
     policy = _policy_config.create_trained_trace_vla_policy(
         train_config,
@@ -1014,7 +1014,13 @@ def run_episode(*, env, calib: dict[str, Any], policy, task_description: str,
             print(f"  [skill={skill_idx} {skill_text}] semantic-target query failed: {exc}", flush=True)
             print(f"  -> falling back to image center.", flush=True)
             sem_pixel = (W // 2, H // 2)
-        sem_xy_norm = list(pixel_to_normalized_xy(sem_pixel[0], sem_pixel[1], W, H)) + [obs['agentview_depth'][::-1, ::-1, :][sem_pixel[1], sem_pixel[0]][0]]
+        # HACK: offset?
+        DEPTH_OFFSET = 0.2
+        sem_xy_norm = list(pixel_to_normalized_xy(sem_pixel[0], sem_pixel[1], W, H)) + [obs['agentview_depth'][::-1, ::-1, :][sem_pixel[1], sem_pixel[0]][0] - DEPTH_OFFSET]
+        print("#"*60)
+        print(obs['agentview_depth'].shape)
+        print("Semantic Target:", sem_xy_norm)
+        print("#"*60)
 
         skill_ctx = SkillContext(
             skill_text=skill_text,
@@ -1056,8 +1062,8 @@ def run_episode(*, env, calib: dict[str, Any], policy, task_description: str,
             need_replan = chunks_since_replan >= args.replan_every_chunks
             if need_replan and trace_frozen:
                 # Make the freeze visible in the log even when a replan would otherwise have fired.
-                print(f"    chunk-replan suppressed: trace frozen for this skill "
-                      f"(chunks_since_replan={chunks_since_replan})", flush=True)
+                #print(f"    chunk-replan suppressed: trace frozen for this skill "
+                #      f"(chunks_since_replan={chunks_since_replan})", flush=True)
                 # Reset so we don't print this every chunk while frozen — the next print
                 # will only happen if the freeze is somehow lifted (currently never within a skill).
                 chunks_since_replan = 0

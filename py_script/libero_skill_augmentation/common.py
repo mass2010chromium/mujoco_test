@@ -47,6 +47,32 @@ SKILL_DEFINITIONS = """Allowed skill set and exact syntax:
 - both object1 and object2 must be a single object with no commas in the description
 - Example: PICKUP_FROM(red and yellow mug, table), PICKUP_FROM(black bowl, table surface)
 
+Notes:
+- PICKUP_FROM is only for movable objects such as mugs, bowls, and pots that can be picked up and placed.
+"""
+
+SKILL_DEFINITIONS_LIBERO = """Allowed skill set and exact syntax:
+1) PLACE_ON(object1, object2)
+- description: place object1 onto object2
+- object1: the object being placed
+- object2: object that will support object1
+- both object1 and object2 must be a single object with no commas in the description
+- Example: PLACE_ON(black bowl, plate), PLACE_ON(butter, top of the cabinet)
+
+2) PLACE_IN(object1, object2)
+- description: place object1 into object2
+- object1: the object being placed
+- object2: object that will contain object1
+- both object1 and object2 must be a single object with no commas in the description
+- Example: PLACE_IN(black bowl, top drawer), PLACE_IN(butter, basket)
+
+3) PICKUP_FROM(object1, object2)
+- description: pick up object1 from object2
+- object1: the object being picked up. This must be a movable object that can be picked up.
+- object2: object that supports object1 originally
+- both object1 and object2 must be a single object with no commas in the description
+- Example: PICKUP_FROM(red and yellow mug, table), PICKUP_FROM(black bowl, table surface)
+
 4) OPEN(object)
 - object: the object being opened
 - should be a single object with no commas in the description
