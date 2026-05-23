@@ -25,7 +25,7 @@ class ServePolicy(BasePolicy):
     def reset(self) -> None:
         self._policy.reset()
 
-policy = load_policy('pi05_real_lora')
+policy = load_policy('pi05_real_full_ft')
 
 server = WebsocketPolicyServer(policy=ServePolicy(policy), port=9898)
 server.serve_forever()

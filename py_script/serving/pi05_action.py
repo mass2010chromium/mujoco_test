@@ -64,3 +64,4 @@ def create_pi05_real(model_name, config, checkpoint_dir, norm_stats):
 
 register_base_model(create_pi05_default, "pi05_libero")
 register_model(create_pi05_real, "pi05_real_lora", 2000)
+register_model(create_pi05_real, "pi05_real_full_ft", 29999, _checkpoint_dir="/work/hdd/bgtb/zhong2/checkpoints/pi05_table_tasks/pi05_table_tasks/29999")

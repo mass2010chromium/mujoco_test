@@ -26,10 +26,11 @@ def quat2axisangle(quat):
 
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
-def get_model_info(model_name, checkpoint_num, run_name=None):
+def get_model_info(model_name, checkpoint_num, run_name=None, checkpoint_dir=None):
     if run_name is None:
         run_name = model_name
-    checkpoint_dir = os.path.join(OPENPI_ROOT, 'checkpoints', model_name, run_name, str(checkpoint_num))
+    if checkpoint_dir is None:
+        checkpoint_dir = os.path.join(OPENPI_ROOT, 'checkpoints', model_name, run_name, str(checkpoint_num))
     assets_dir = os.path.join(OPENPI_ROOT, 'assets', model_name)
     vla_config = _config.get_config(model_name)
     checkpoint_dir = pathlib.Path(checkpoint_dir).resolve()
@@ -54,7 +55,7 @@ def register_base_model(factory_func, model_name: str):
         return factory_func(model_name)
     MODEL_REGISTRY[model_name] = {0: create_model}
 
-def register_model(factory_func, model_name: str, checkpoint_num: int, run_name: str = None):
+def register_model(factory_func, model_name: str, checkpoint_num: int, run_name: str = None, _checkpoint_dir: str = None):
     """
     Register a locally downloaded model.
     """
@@ -63,7 +64,7 @@ def register_model(factory_func, model_name: str, checkpoint_num: int, run_name:
     models = MODEL_REGISTRY[model_name]
 
     def create_model():
-        config, checkpoint_dir, norm_stats = get_model_info(model_name, checkpoint_num, run_name=run_name)
+        config, checkpoint_dir, norm_stats = get_model_info(model_name, checkpoint_num, run_name=run_name, checkpoint_dir=_checkpoint_dir)
         return factory_func(model_name, config, checkpoint_dir, norm_stats)
     models[checkpoint_num] = create_model
 
