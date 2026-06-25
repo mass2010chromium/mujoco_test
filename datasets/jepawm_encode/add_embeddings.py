@@ -42,16 +42,39 @@ def process_episode(episode, episode_idx):
     with open(f"{out_dir}/{episode_idx}.meta.json", "w") as jf:
         json.dump([all_encodings.shape, str(all_encodings.dtype)], jf)
 
-start_index = int(sys.argv[1])
 N = len(dataset.episode_starts)
+start_index = 0
+end_index = N
+skip_present = False
+
+if len(sys.argv) > 1:
+    if sys.argv[1].strip() == "--fix":
+        skip_present = True
+    else:
+        start_index = int(sys.argv[1])
+if len(sys.argv) > 2:
+    end_index = int(sys.argv[2])
 #N = 1
 
 from tqdm import tqdm
-for i in tqdm(range(start_index, N)):
+for i in tqdm(range(start_index, end_index)):
     # Dependencies:
-    # pip install pygame shapely scikit-image nevergrad lpips seaborn clusterscope ruamel.yaml
+    # pip install pygame shapely scikit-image nevergrad lpips seaborn clusterscope ruamel.yaml backports.zstd
     # also:
     # decord (but needs source install?)
+    if skip_present:
+        json_filename = f"{out_dir}/{i}.meta.json"
+        skip = os.path.exists(f"{out_dir}/{i}.zstd") and os.path.exists(json_filename)
+        try:
+            with open(json_filename, "r") as jf:
+                data = json.load(jf)
+        except:
+            print("Failed to open metadata file")
+            skip = False
+        if skip:
+            print(f"Skipping episode: {i}", flush=True)
+            continue 
     print(f"Processing episode: {i}", flush=True)
     episode = get_episode(i)
     process_episode(episode, i)
+print(f"Done. [{start_index}, {end_index})")
